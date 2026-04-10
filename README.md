@@ -125,22 +125,35 @@ This is the intended V1 integration point for Dokploy prestart or init hooks: Do
 
 GitHub Actions builds release binaries from tags and uploads them to GitHub Releases.
 
-Install the latest published binary:
+For a private repository, install from an authenticated GitHub CLI session:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/scripts/install-from-github.sh | bash
+mkdir -p /tmp/envcraft-install ~/.local/bin
+gh release download v0.1.0 \
+  --repo JhonaCodes/env-craft \
+  --pattern 'envcraft-macos-aarch64.tar.gz' \
+  --dir /tmp/envcraft-install
+tar -xzf /tmp/envcraft-install/envcraft-macos-aarch64.tar.gz -C /tmp/envcraft-install
+install -m 0755 /tmp/envcraft-install/envcraft ~/.local/bin/envcraft
+envcraft --version
 ```
 
-Install a specific version:
+If `~/.local/bin` is not on your `PATH`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/scripts/install-from-github.sh | VERSION=v0.1.0 bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Supported release assets:
 - `envcraft-linux-x86_64.tar.gz`
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
+
+If the repository is made public later, the helper script can be used directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/scripts/install-from-github.sh | VERSION=v0.1.0 bash
+```
 
 To publish a release, push a semantic version tag such as `v0.1.0`.
 
