@@ -110,7 +110,13 @@ envcraft init \
   --bootstrap-dir ~/code/envcraft-secrets
 ```
 
-This creates the global EnvCraft config in `~/.envcraft/config.toml` and optionally writes the control-plane workflow files into a local checkout of `envcraft-secrets`.
+This single command now:
+- reads your GitHub auth from `GITHUB_TOKEN` or `gh auth login`
+- creates the private `envcraft-secrets` repository if it does not exist
+- clones or updates the local control-plane checkout
+- writes the control-plane workflow files
+- commits and pushes the bootstrap if there are changes
+- saves the global EnvCraft config in `~/.envcraft/config.toml`
 
 ### 2. Link an application repository
 

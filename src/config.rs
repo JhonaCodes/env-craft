@@ -58,9 +58,18 @@ impl AppConfig {
         Ok(Self::cache_dir()?.join("artifacts"))
     }
 
+    pub fn control_repos_dir() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("repos"))
+    }
+
+    pub fn default_control_repo_path(&self) -> Result<PathBuf> {
+        Ok(Self::control_repos_dir()?.join(&self.control_repo))
+    }
+
     pub fn ensure_local_dirs(&self) -> Result<()> {
         fs::create_dir_all(Self::requests_dir()?)?;
         fs::create_dir_all(Self::artifacts_dir()?)?;
+        fs::create_dir_all(Self::control_repos_dir()?)?;
         Ok(())
     }
 
@@ -140,5 +149,20 @@ mod tests {
         };
 
         assert_eq!(config.control_repo_slug(), "JhonaCodes/envcraft-secrets");
+    }
+
+    #[test]
+    fn builds_default_control_repo_path() {
+        let config = AppConfig {
+            github_owner: "JhonaCodes".to_string(),
+            control_repo: "envcraft-secrets".to_string(),
+            deliver_workflow: "deliver.yml".to_string(),
+            default_ref: "main".to_string(),
+            token_env_var: "GITHUB_TOKEN".to_string(),
+            control_repo_local_path: None,
+        };
+
+        let path = config.default_control_repo_path().unwrap();
+        assert!(path.ends_with(".envcraft/repos/envcraft-secrets"));
     }
 }

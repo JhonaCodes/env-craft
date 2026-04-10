@@ -1,6 +1,7 @@
 use std::{
     fs,
     io::{Cursor, Read},
+    process::Command,
     thread,
     time::{Duration, Instant},
 };
@@ -52,6 +53,26 @@ pub struct Artifact {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct Repository {
+    pub name: String,
+    pub clone_url: String,
+    pub default_branch: String,
+    pub html_url: String,
+    pub private: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthenticatedUser {
+    pub login: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnsureRepoResult {
+    pub repo: Repository,
+    pub created: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct RepoSecretsResponse {
     secrets: Vec<RepoSecretMetadata>,
@@ -63,14 +84,38 @@ struct ArtifactListResponse {
 }
 
 impl GitHubClient {
+    pub fn from_token_source(token_env_var: &str) -> Result<Self> {
+        if let Ok(token) = std::env::var(token_env_var) {
+            if !token.trim().is_empty() {
+                return Self::new(token.trim());
+            }
+        }
+
+        let output = Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .context("failed to execute `gh auth token`")?;
+
+        if !output.status.success() {
+            bail!(
+                "missing GitHub token in {token_env_var} and unable to read local GitHub CLI auth. Run `gh auth login` or export {token_env_var}"
+            );
+        }
+
+        let token =
+            String::from_utf8(output.stdout).context("GitHub CLI token was not valid UTF-8")?;
+        let token = token.trim();
+        if token.is_empty() {
+            bail!(
+                "GitHub CLI returned an empty token. Run `gh auth login` or export {token_env_var}"
+            );
+        }
+
+        Self::new(token)
+    }
+
     pub fn from_config(config: &AppConfig) -> Result<Self> {
-        let token = std::env::var(&config.token_env_var).with_context(|| {
-            format!(
-                "missing GitHub token in environment variable {}",
-                config.token_env_var
-            )
-        })?;
-        Self::new(&token)
+        Self::from_token_source(&config.token_env_var)
     }
 
     pub fn new(token: &str) -> Result<Self> {
@@ -94,6 +139,63 @@ impl GitHubClient {
         self.get_json(&format!(
             "{API_BASE}/repos/{owner}/{repo}/actions/secrets/public-key"
         ))
+    }
+
+    pub fn current_user(&self) -> Result<AuthenticatedUser> {
+        self.get_json(&format!("{API_BASE}/user"))
+    }
+
+    pub fn get_repo(&self, owner: &str, repo: &str) -> Result<Option<Repository>> {
+        let response = self
+            .http
+            .get(format!("{API_BASE}/repos/{owner}/{repo}"))
+            .send()?;
+
+        match response.status().as_u16() {
+            200 => Ok(Some(
+                response
+                    .json()
+                    .context("failed to decode repository payload")?,
+            )),
+            404 => Ok(None),
+            _ => Err(read_error(response)),
+        }
+    }
+
+    pub fn ensure_private_repo(&self, owner: &str, repo: &str) -> Result<EnsureRepoResult> {
+        if let Some(repo_info) = self.get_repo(owner, repo)? {
+            return Ok(EnsureRepoResult {
+                repo: repo_info,
+                created: false,
+            });
+        }
+
+        let current_user = self.current_user()?;
+        let endpoint = if current_user.login.eq_ignore_ascii_case(owner) {
+            format!("{API_BASE}/user/repos")
+        } else {
+            format!("{API_BASE}/orgs/{owner}/repos")
+        };
+
+        let response = self
+            .http
+            .post(endpoint)
+            .json(&json!({
+                "name": repo,
+                "private": true,
+                "auto_init": false,
+            }))
+            .send()?;
+
+        match response.status().as_u16() {
+            201 => Ok(EnsureRepoResult {
+                repo: response
+                    .json()
+                    .context("failed to decode created repository payload")?,
+                created: true,
+            }),
+            _ => Err(read_error(response)),
+        }
     }
 
     pub fn put_repo_secret(
@@ -307,7 +409,7 @@ fn read_error(response: Response) -> anyhow::Error {
 mod tests {
     use crate::session::{DeliverySession, encrypt_for_session};
 
-    use super::encrypt_for_github_secret;
+    use super::{GitHubClient, encrypt_for_github_secret};
 
     #[test]
     fn github_secret_encryption_is_compatible_with_session_sealed_box() {
@@ -323,5 +425,11 @@ mod tests {
         let ciphertext =
             encrypt_for_session(&session.recipient_public_key_b64(), "{\"value\":\"x\"}").unwrap();
         assert!(ciphertext.len() > 20);
+    }
+
+    #[test]
+    fn builds_client_with_direct_token() {
+        let client = GitHubClient::new("fake-token");
+        assert!(client.is_ok());
     }
 }

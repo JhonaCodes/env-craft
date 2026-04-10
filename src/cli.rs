@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -186,25 +187,47 @@ pub fn run(cli: Cli) -> Result<()> {
 }
 
 fn init(args: InitArgs) -> Result<()> {
-    let config = AppConfig {
+    let mut config = AppConfig {
         github_owner: args.github_owner,
         control_repo: args.control_repo,
         deliver_workflow: args.workflow,
         default_ref: args.git_ref,
         token_env_var: args.token_env_var,
-        control_repo_local_path: args.bootstrap_dir.clone(),
+        control_repo_local_path: None,
     };
+    let bootstrap_dir = args
+        .bootstrap_dir
+        .unwrap_or(config.default_control_repo_path()?);
+    config.control_repo_local_path = Some(bootstrap_dir.clone());
     config.ensure_local_dirs()?;
+    let github = GitHubClient::from_token_source(&config.token_env_var)?;
+    let ensured = github.ensure_private_repo(&config.github_owner, &config.control_repo)?;
+    config.default_ref = ensured.repo.default_branch.clone();
+    ensure_local_control_repo(
+        &bootstrap_dir,
+        &ensured.repo.clone_url,
+        &ensured.repo.default_branch,
+    )?;
+    let created = bootstrap_control_plane(&bootstrap_dir, &config)?;
+    commit_and_push_bootstrap(&bootstrap_dir, &created, &ensured.repo.default_branch)?;
+
     let config_path = config.save()?;
 
     println!("Saved EnvCraft config to {}", config_path.display());
-
-    if let Some(dir) = args.bootstrap_dir {
-        let created = bootstrap_control_plane(&dir, &config)?;
-        println!("Bootstrapped control plane at {}", dir.display());
-        for file in created {
-            println!("  wrote {}", file.display());
-        }
+    if ensured.created {
+        println!(
+            "Created private control-plane repository at {}",
+            ensured.repo.html_url
+        );
+    } else {
+        println!(
+            "Using existing control-plane repository at {}",
+            ensured.repo.html_url
+        );
+    }
+    println!("Bootstrapped control plane at {}", bootstrap_dir.display());
+    for file in created {
+        println!("  wrote {}", file.display());
     }
 
     Ok(())
@@ -512,6 +535,115 @@ fn write_dotenv(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
         .join("\n");
     fs::write(path, format!("{body}\n"))?;
     Ok(())
+}
+
+fn ensure_local_control_repo(root: &Path, clone_url: &str, default_branch: &str) -> Result<()> {
+    if root.join(".git").exists() {
+        run_git(root, &["pull", "--ff-only"])?;
+        return Ok(());
+    }
+
+    if root.exists() && fs::read_dir(root)?.next().is_some() {
+        bail!(
+            "bootstrap directory {} exists and is not an empty git repository",
+            root.display()
+        );
+    }
+
+    if let Some(parent) = root.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    run_git_in(None, &["clone", clone_url, &root.display().to_string()])?;
+
+    if repo_has_no_commits(root)? {
+        run_git(root, &["checkout", "-B", default_branch])?;
+    }
+
+    Ok(())
+}
+
+fn commit_and_push_bootstrap(
+    root: &Path,
+    created_files: &[PathBuf],
+    default_branch: &str,
+) -> Result<()> {
+    if repo_has_no_commits(root)? {
+        run_git(root, &["checkout", "-B", default_branch])?;
+    }
+
+    let relative_files = created_files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+
+    if !relative_files.is_empty() {
+        let mut add_command = ProcessCommand::new("git");
+        add_command.arg("-C").arg(root);
+        add_command.arg("add");
+        for path in &relative_files {
+            add_command.arg(path);
+        }
+        let output = add_command
+            .output()
+            .context("failed to stage bootstrap files")?;
+        if !output.status.success() {
+            bail!(
+                "git add failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+    }
+
+    let status = run_git_capture(root, &["status", "--short"])?;
+    if status.trim().is_empty() {
+        return Ok(());
+    }
+
+    run_git(root, &["commit", "-m", "Bootstrap EnvCraft control plane"])?;
+    run_git(root, &["push", "-u", "origin", default_branch])?;
+    Ok(())
+}
+
+fn repo_has_no_commits(root: &Path) -> Result<bool> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .context("failed to inspect git history")?;
+    Ok(!output.status.success())
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Result<()> {
+    let _ = run_git_capture(root, args)?;
+    Ok(())
+}
+
+fn run_git_capture(root: &Path, args: &[&str]) -> Result<String> {
+    run_git_in(Some(root), args)
+}
+
+fn run_git_in(root: Option<&Path>, args: &[&str]) -> Result<String> {
+    let mut command = ProcessCommand::new("git");
+    if let Some(root) = root {
+        command.arg("-C").arg(root);
+    }
+    command.args(args);
+    let output = command.output().context("failed to run git")?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[cfg(test)]
