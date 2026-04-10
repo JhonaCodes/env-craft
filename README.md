@@ -52,6 +52,29 @@ envcraft deploy-inject --env prod > env.sh
 envcraft set DB_PASSWORD --env prod --project nui-app --root /path/to/nui-app --generate
 ```
 
+## Release installation
+
+GitHub Actions builds release binaries from tags and uploads them to GitHub Releases.
+
+Install the latest published binary:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/scripts/install-from-github.sh | bash
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/scripts/install-from-github.sh | VERSION=v0.1.0 bash
+```
+
+Supported release assets:
+- `envcraft-linux-x86_64.tar.gz`
+- `envcraft-macos-x86_64.tar.gz`
+- `envcraft-macos-aarch64.tar.gz`
+
+To publish a release, push a semantic version tag such as `v0.1.0`.
+
 ## Control-plane bootstrap
 
 `envcraft init --bootstrap-dir ...` writes:
