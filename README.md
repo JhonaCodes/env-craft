@@ -2,6 +2,32 @@
 
 EnvCraft is a Rust 2024 CLI for managing environment variables across many projects while keeping **GitHub Secrets** as the only secret store.
 
+## Quick install
+
+Install the latest release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | bash
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.0 bash
+```
+
+Verify the binary:
+
+```bash
+envcraft --version
+```
+
+If `envcraft` is not found after installation:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
 It is meant for the situation where:
 - one person or a small team owns many repositories
 - local `.env` setup is repetitive and error-prone
@@ -125,35 +151,22 @@ This is the intended V1 integration point for Dokploy prestart or init hooks: Do
 
 GitHub Actions builds release binaries from tags and uploads them to GitHub Releases.
 
-For a private repository, install from an authenticated GitHub CLI session:
+Public one-command installation:
 
 ```bash
-mkdir -p /tmp/envcraft-install ~/.local/bin
-gh release download v0.1.0 \
-  --repo JhonaCodes/env-craft \
-  --pattern 'envcraft-macos-aarch64.tar.gz' \
-  --dir /tmp/envcraft-install
-tar -xzf /tmp/envcraft-install/envcraft-macos-aarch64.tar.gz -C /tmp/envcraft-install
-install -m 0755 /tmp/envcraft-install/envcraft ~/.local/bin/envcraft
-envcraft --version
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | bash
 ```
 
-If `~/.local/bin` is not on your `PATH`:
+Version-pinned installation:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.0 bash
 ```
 
 Supported release assets:
 - `envcraft-linux-x86_64.tar.gz`
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
-
-If the repository is made public later, the helper script can be used directly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/scripts/install-from-github.sh | VERSION=v0.1.0 bash
-```
 
 To publish a release, push a semantic version tag such as `v0.1.0`.
 
