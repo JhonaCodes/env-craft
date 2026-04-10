@@ -1,0 +1,6 @@
+.env
+.env.*
+!.envcraft.schema
+.envcraft/
+.envcraft.generated.*
+/target
