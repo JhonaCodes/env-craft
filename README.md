@@ -2,6 +2,12 @@
 
 EnvCraft is a Rust 2024 CLI for managing environment variables across many projects while keeping **GitHub Secrets** as the only secret store.
 
+It is meant for the situation where:
+- one person or a small team owns many repositories
+- local `.env` setup is repetitive and error-prone
+- deploy secrets should not live only inside Dokploy
+- GitHub should remain the long-term source of truth, while GitHub Actions performs controlled secret delivery
+
 The intended usage model is:
 - install the `envcraft` binary globally
 - run `envcraft` from any project directory
@@ -14,6 +20,21 @@ V1 goals in this repository:
 - create and update secrets in GitHub
 - reveal one secret at a time through **GitHub Actions**
 - build local `.env` files and deploy-time export scripts from per-key delivery
+
+## What EnvCraft does
+
+- stores secret values in GitHub Secrets, not in the CLI repository
+- uses the current repository context to determine which project you are operating on
+- supports explicit overrides with `--project` and `--root` when you need to work from another directory
+- uses GitHub Actions for all secret read operations because GitHub does not expose secret values directly through its API
+- produces local `.env` files for development and shell exports for deploy-time injection
+
+## What EnvCraft does not do
+
+- it does not read secret values directly through GitHub's REST API
+- it does not bake secrets into Docker images by design
+- it does not require a custom database or custom vault service for V1
+- it does not replace Dokploy; it complements Dokploy by handling secret delivery before runtime
 
 ## Current V1 transport
 
@@ -51,6 +72,54 @@ envcraft deploy-inject --env prod > env.sh
 # Explicit override when running from another directory
 envcraft set DB_PASSWORD --env prod --project nui-app --root /path/to/nui-app --generate
 ```
+
+## Typical workflows
+
+### 1. Bootstrap the control plane
+
+```bash
+envcraft init \
+  --github-owner JhonaCodes \
+  --control-repo envcraft-secrets \
+  --bootstrap-dir ~/code/envcraft-secrets
+```
+
+This creates the global EnvCraft config in `~/.envcraft/config.toml` and optionally writes the control-plane workflow files into a local checkout of `envcraft-secrets`.
+
+### 2. Link an application repository
+
+```bash
+cd ~/code/nui-app
+envcraft link --project nui-app --env dev --env prod
+```
+
+That creates `.envcraft.schema`, which becomes the local contract for the repository.
+
+### 3. Create or rotate secrets
+
+```bash
+envcraft set DB_PASSWORD --env prod --generate
+envcraft set STRIPE_SECRET_KEY --env prod
+```
+
+These commands write to GitHub Secrets in the central control-plane repository and sync the local schema metadata.
+
+### 4. Build local developer env files
+
+```bash
+envcraft pull --env dev --output .env.dev
+```
+
+Each requested logical key is resolved through a one-time GitHub Actions workflow and assembled into a local `.env` file.
+
+### 5. Inject secrets for deployment
+
+```bash
+envcraft deploy-inject --env prod > env.sh
+source env.sh
+```
+
+This is the intended V1 integration point for Dokploy prestart or init hooks: Dokploy still builds and deploys, while EnvCraft resolves secrets right before runtime.
 
 ## Release installation
 
@@ -106,3 +175,4 @@ vars:
 - GitHub does not expose secret values through its API.
 - Because of that, EnvCraft writes secrets directly through the GitHub Secrets API, but reads them only through Actions.
 - Full `.env` delivery currently costs one workflow run per key. That is acceptable for V1 correctness and can be optimized later.
+- The CLI is intended to be installed globally; the source repository is only for development and release publishing.

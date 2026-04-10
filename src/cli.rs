@@ -21,7 +21,10 @@ use crate::{
 #[command(
     name = "envcraft",
     version,
-    about = "GitHub-backed environment secret orchestration"
+    about = "Manage project secrets through GitHub Secrets and GitHub Actions",
+    long_about = "EnvCraft is a global CLI for developers who manage many repositories. \
+It keeps secret values in GitHub Secrets, uses GitHub Actions as the only authorized reader, \
+and resolves the active project from the current directory's .envcraft.schema by default."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -30,17 +33,30 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Create or update the global EnvCraft configuration")]
     Init(InitArgs),
+    #[command(about = "Link the current repository to an EnvCraft project")]
     Link(LinkArgs),
+    #[command(about = "Create or update a single secret in the control-plane repository")]
     Set(SetArgs),
+    #[command(about = "Generate a group of standard secrets from stack presets")]
     Generate(GenerateArgs),
+    #[command(about = "List logical variables and, optionally, remote secret availability")]
     List(ListArgs),
+    #[command(about = "Resolve every declared key for one environment into a local .env file")]
     Pull(DeliverArgs),
+    #[command(about = "Reveal one logical key through a one-time GitHub Actions delivery flow")]
     Reveal(RevealArgs),
+    #[command(
+        about = "Emit shell exports for deploy-time injection without baking secrets into images"
+    )]
     DeployInject(DeliverArgs),
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_help = "Example:\n  envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets --bootstrap-dir ~/code/envcraft-secrets"
+)]
 struct InitArgs {
     #[arg(long)]
     github_owner: String,
@@ -57,6 +73,7 @@ struct InitArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = "Example:\n  envcraft link --project nui-app --env dev --env prod")]
 struct LinkArgs {
     #[arg(long)]
     project: String,
@@ -67,6 +84,9 @@ struct LinkArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_help = "Examples:\n  envcraft set DB_PASSWORD --env prod --generate\n  envcraft set STRIPE_SECRET_KEY --env prod --project billing-api --root ~/code/billing-api"
+)]
 struct SetArgs {
     logical_key: String,
     #[arg(long)]
@@ -90,6 +110,9 @@ struct SetArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_help = "Example:\n  envcraft generate --env dev --preset postgres --preset jwt --extra-key INTERNAL_API_TOKEN"
+)]
 struct GenerateArgs {
     #[arg(long)]
     project: Option<String>,
@@ -106,6 +129,7 @@ struct GenerateArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = "Examples:\n  envcraft list\n  envcraft list --remote --env prod")]
 struct ListArgs {
     #[arg(long)]
     project: Option<String>,
@@ -118,6 +142,9 @@ struct ListArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft deploy-inject --env prod > env.sh"
+)]
 struct DeliverArgs {
     #[arg(long)]
     project: Option<String>,
@@ -130,6 +157,9 @@ struct DeliverArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_help = "Examples:\n  envcraft reveal DB_PASSWORD --env prod\n  envcraft reveal JWT_SECRET --env prod --output /tmp/jwt.env"
+)]
 struct RevealArgs {
     logical_key: String,
     #[arg(long)]
