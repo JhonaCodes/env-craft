@@ -16,6 +16,7 @@ use crate::{
     schema::ProjectSchema,
     secrets::{StackPreset, generate_from_presets, generate_secret_like},
     session::DeliverySession,
+    upgrade::upgrade_binary,
 };
 
 #[derive(Debug, Parser)]
@@ -44,6 +45,8 @@ enum Command {
     Generate(GenerateArgs),
     #[command(about = "List logical variables and, optionally, remote secret availability")]
     List(ListArgs),
+    #[command(about = "Download the latest EnvCraft release and replace the current binary")]
+    Upgrade(UpgradeArgs),
     #[command(about = "Resolve every declared key for one environment into a local .env file")]
     Pull(DeliverArgs),
     #[command(about = "Reveal one logical key through a one-time GitHub Actions delivery flow")]
@@ -143,6 +146,13 @@ struct ListArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.1")]
+struct UpgradeArgs {
+    #[arg(long)]
+    version: Option<String>,
+}
+
+#[derive(Debug, Args)]
 #[command(
     after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft deploy-inject --env prod > env.sh"
 )]
@@ -180,6 +190,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Set(args) => set(args),
         Command::Generate(args) => generate(args),
         Command::List(args) => list(args),
+        Command::Upgrade(args) => upgrade(args),
         Command::Pull(args) => pull(args),
         Command::Reveal(args) => reveal(args),
         Command::DeployInject(args) => deploy_inject(args),
@@ -383,6 +394,18 @@ fn list(args: ListArgs) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+fn upgrade(args: UpgradeArgs) -> Result<()> {
+    let version_label = args.version.as_deref().unwrap_or("latest");
+    let installed_path = upgrade_binary(args.version.as_deref())?;
+    println!(
+        "Upgraded EnvCraft to {} at {}",
+        version_label,
+        installed_path.display()
+    );
+    println!("Run `envcraft --version` to confirm the active binary.");
     Ok(())
 }
 

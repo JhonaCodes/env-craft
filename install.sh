@@ -51,4 +51,5 @@ install -m 0755 "${tmp_dir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
 
 echo "Installed ${BIN_NAME} to ${INSTALL_DIR}/${BIN_NAME}"
 echo "Run '${BIN_NAME} --version' to verify the installation."
+echo "Later you can self-update with '${BIN_NAME} upgrade'."
 echo "If needed, add ${INSTALL_DIR} to your PATH."
