@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.0 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.2 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.1
+envcraft upgrade --version v0.1.2
 ```
 
 If `envcraft` is not found after installation:
@@ -125,7 +125,8 @@ envcraft init \
 ```
 
 This single command now:
-- reads your GitHub auth from `GITHUB_TOKEN` or `gh auth login`
+- reads your GitHub auth from `GITHUB_TOKEN`
+- or falls back to your local `gh` session automatically from inside `envcraft`
 - creates the private `envcraft-secrets` repository if it does not exist
 - clones or updates the local control-plane checkout
 - writes the control-plane workflow files
@@ -180,7 +181,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.1 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.2 bash
 ```
 
 Supported release assets:
@@ -188,7 +189,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.1`.
+To publish a release, push a semantic version tag such as `v0.1.2`.
 
 ## Control-plane bootstrap
 
@@ -215,6 +216,23 @@ vars:
     generate: true
     required: true
 ```
+
+## Where configuration lives
+
+- `env-craft` repo:
+  - source code for the CLI
+  - release pipeline
+  - installer script
+- target application repo:
+  - local `.envcraft.schema`
+  - for example `acordio_app/.envcraft.schema`
+- control-plane repo such as `envcraft-secrets`:
+  - delivery workflow
+  - control-plane script
+  - GitHub Secrets storage
+- local machine:
+  - `~/.envcraft/config.toml`
+  - `~/.envcraft/repos/envcraft-secrets`
 
 ## Notes
 

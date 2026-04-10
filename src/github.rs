@@ -1,7 +1,9 @@
 use std::{
+    collections::BTreeMap,
     fs,
-    io::{Cursor, Read},
-    process::Command,
+    io::{Cursor, Read, Write},
+    path::{Path, PathBuf},
+    process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -28,7 +30,13 @@ const SEAL_OVERHEAD: usize = 48;
 
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
-    http: Client,
+    backend: GitHubBackend,
+}
+
+#[derive(Debug, Clone)]
+enum GitHubBackend {
+    Http(Client),
+    GhCli,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +91,11 @@ struct ArtifactListResponse {
     artifacts: Vec<Artifact>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GhHostEntry {
+    oauth_token: Option<String>,
+}
+
 impl GitHubClient {
     pub fn from_token_source(token_env_var: &str) -> Result<Self> {
         if let Ok(token) = std::env::var(token_env_var) {
@@ -91,27 +104,17 @@ impl GitHubClient {
             }
         }
 
-        let output = Command::new("gh")
-            .args(["auth", "token"])
-            .output()
-            .context("failed to execute `gh auth token`")?;
-
-        if !output.status.success() {
-            bail!(
-                "missing GitHub token in {token_env_var} and unable to read local GitHub CLI auth. Run `gh auth login` or export {token_env_var}"
-            );
+        if let Some(token) = read_github_cli_token()? {
+            return Self::new(&token);
         }
 
-        let token =
-            String::from_utf8(output.stdout).context("GitHub CLI token was not valid UTF-8")?;
-        let token = token.trim();
-        if token.is_empty() {
-            bail!(
-                "GitHub CLI returned an empty token. Run `gh auth login` or export {token_env_var}"
-            );
+        if let Ok(client) = Self::from_gh_cli_auth() {
+            return Ok(client);
         }
 
-        Self::new(token)
+        bail!(
+            "missing GitHub token in {token_env_var} and unable to read local GitHub CLI auth. Run `gh auth login` or export {token_env_var}"
+        );
     }
 
     pub fn from_config(config: &AppConfig) -> Result<Self> {
@@ -129,10 +132,32 @@ impl GitHubClient {
             "X-GitHub-Api-Version",
             HeaderValue::from_static(API_VERSION),
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("envcraft/0.1.0"));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&format!("envcraft/{}", env!("CARGO_PKG_VERSION")))?,
+        );
 
         let http = Client::builder().default_headers(headers).build()?;
-        Ok(Self { http })
+        Ok(Self {
+            backend: GitHubBackend::Http(http),
+        })
+    }
+
+    pub fn from_gh_cli_auth() -> Result<Self> {
+        let output = Command::new("gh")
+            .args(["auth", "status", "--hostname", "github.com"])
+            .output()
+            .context("failed to execute `gh auth status`")?;
+
+        if !output.status.success() {
+            bail!(
+                "GitHub CLI is not authenticated for github.com. Run `gh auth login` or export GITHUB_TOKEN"
+            );
+        }
+
+        Ok(Self {
+            backend: GitHubBackend::GhCli,
+        })
     }
 
     pub fn get_repo_public_key(&self, owner: &str, repo: &str) -> Result<RepoPublicKey> {
@@ -146,19 +171,36 @@ impl GitHubClient {
     }
 
     pub fn get_repo(&self, owner: &str, repo: &str) -> Result<Option<Repository>> {
-        let response = self
-            .http
-            .get(format!("{API_BASE}/repos/{owner}/{repo}"))
-            .send()?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}");
 
-        match response.status().as_u16() {
-            200 => Ok(Some(
-                response
-                    .json()
-                    .context("failed to decode repository payload")?,
-            )),
-            404 => Ok(None),
-            _ => Err(read_error(response)),
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.get(url).send()?;
+
+                match response.status().as_u16() {
+                    200 => Ok(Some(
+                        response
+                            .json()
+                            .context("failed to decode repository payload")?,
+                    )),
+                    404 => Ok(None),
+                    _ => Err(read_error(response)),
+                }
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("GET", &url, None)?;
+                if output.status.success() {
+                    let repo: Repository = serde_json::from_slice(&output.stdout)
+                        .context("failed to decode repository payload")?;
+                    return Ok(Some(repo));
+                }
+
+                if gh_output_indicates_status(&output, 404) {
+                    return Ok(None);
+                }
+
+                Err(gh_api_error("GET", &url, &output))
+            }
         }
     }
 
@@ -177,25 +219,17 @@ impl GitHubClient {
             format!("{API_BASE}/orgs/{owner}/repos")
         };
 
-        let response = self
-            .http
-            .post(endpoint)
-            .json(&json!({
-                "name": repo,
-                "private": true,
-                "auto_init": false,
-            }))
-            .send()?;
+        let payload = json!({
+            "name": repo,
+            "private": true,
+            "auto_init": false,
+        });
 
-        match response.status().as_u16() {
-            201 => Ok(EnsureRepoResult {
-                repo: response
-                    .json()
-                    .context("failed to decode created repository payload")?,
-                created: true,
-            }),
-            _ => Err(read_error(response)),
-        }
+        let repo_info: Repository = self.post_json(&endpoint, &payload)?;
+        Ok(EnsureRepoResult {
+            repo: repo_info,
+            created: true,
+        })
     }
 
     pub fn put_repo_secret(
@@ -209,19 +243,13 @@ impl GitHubClient {
         let encrypted_value = encrypt_for_github_secret(&public_key.key, value)?;
         let url = format!("{API_BASE}/repos/{owner}/{repo}/actions/secrets/{secret_name}");
 
-        let response = self
-            .http
-            .put(url)
-            .json(&json!({
+        self.put_json(
+            &url,
+            &json!({
                 "encrypted_value": encrypted_value,
                 "key_id": public_key.key_id,
-            }))
-            .send()?;
-
-        match response.status().as_u16() {
-            201 | 204 => Ok(()),
-            _ => Err(read_error(response)),
-        }
+            }),
+        )
     }
 
     pub fn list_repo_secrets(&self, owner: &str, repo: &str) -> Result<Vec<RepoSecretMetadata>> {
@@ -246,10 +274,9 @@ impl GitHubClient {
             workflow = config.deliver_workflow,
         );
 
-        let response = self
-            .http
-            .post(url)
-            .json(&json!({
+        self.post_json_empty(
+            &url,
+            &json!({
                 "ref": config.default_ref,
                 "inputs": {
                     "request_id": session.request_id.to_string(),
@@ -259,13 +286,8 @@ impl GitHubClient {
                     "secret_name": secret_name,
                     "recipient_public_key": session.recipient_public_key_b64(),
                 }
-            }))
-            .send()?;
-
-        match response.status().as_u16() {
-            204 => Ok(()),
-            _ => Err(read_error(response)),
-        }
+            }),
+        )
     }
 
     pub fn wait_for_delivery_artifact(
@@ -303,13 +325,9 @@ impl GitHubClient {
         repo: &str,
         artifact_id: u64,
     ) -> Result<DeliveryEnvelope> {
-        let response = self
-            .http
-            .get(format!(
-                "{API_BASE}/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip"
-            ))
-            .send()?;
-        let bytes = response.bytes()?;
+        let bytes = self.get_bytes(&format!(
+            "{API_BASE}/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip"
+        ))?;
         let cursor = Cursor::new(bytes);
         let mut archive = ZipArchive::new(cursor)?;
         if archive.is_empty() {
@@ -375,12 +393,229 @@ impl GitHubClient {
     }
 
     fn get_json<T: for<'de> Deserialize<'de>>(&self, url: &str) -> Result<T> {
-        let response = self.http.get(url).send()?;
-        if !response.status().is_success() {
-            return Err(read_error(response));
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.get(url).send()?;
+                if !response.status().is_success() {
+                    return Err(read_error(response));
+                }
+                response.json().context("failed to decode GitHub response")
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("GET", url, None)?;
+                if !output.status.success() {
+                    return Err(gh_api_error("GET", url, &output));
+                }
+                serde_json::from_slice(&output.stdout).context("failed to decode GitHub response")
+            }
         }
-        response.json().context("failed to decode GitHub response")
     }
+
+    fn post_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        url: &str,
+        payload: &serde_json::Value,
+    ) -> Result<T> {
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.post(url).json(payload).send()?;
+                if !response.status().is_success() {
+                    return Err(read_error(response));
+                }
+                response.json().context("failed to decode GitHub response")
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("POST", url, Some(payload))?;
+                if !output.status.success() {
+                    return Err(gh_api_error("POST", url, &output));
+                }
+                serde_json::from_slice(&output.stdout).context("failed to decode GitHub response")
+            }
+        }
+    }
+
+    fn post_json_empty(&self, url: &str, payload: &serde_json::Value) -> Result<()> {
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.post(url).json(payload).send()?;
+                if !response.status().is_success() {
+                    return Err(read_error(response));
+                }
+                Ok(())
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("POST", url, Some(payload))?;
+                if !output.status.success() {
+                    return Err(gh_api_error("POST", url, &output));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn put_json(&self, url: &str, payload: &serde_json::Value) -> Result<()> {
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.put(url).json(payload).send()?;
+                if !response.status().is_success() {
+                    return Err(read_error(response));
+                }
+                Ok(())
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("PUT", url, Some(payload))?;
+                if !output.status.success() {
+                    return Err(gh_api_error("PUT", url, &output));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.get(url).send()?;
+                if !response.status().is_success() {
+                    return Err(read_error(response));
+                }
+                Ok(response.bytes()?.to_vec())
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("GET", url, None)?;
+                if !output.status.success() {
+                    return Err(gh_api_error("GET", url, &output));
+                }
+                Ok(output.stdout)
+            }
+        }
+    }
+
+    fn run_gh_api(
+        &self,
+        method: &str,
+        url: &str,
+        payload: Option<&serde_json::Value>,
+    ) -> Result<Output> {
+        let endpoint = gh_api_endpoint(url);
+        let mut command = Command::new("gh");
+        command
+            .arg("api")
+            .arg("--method")
+            .arg(method)
+            .arg("-H")
+            .arg(format!("Accept: {ACCEPT_HEADER}"))
+            .arg("-H")
+            .arg(format!("X-GitHub-Api-Version: {API_VERSION}"));
+
+        if payload.is_some() {
+            command.arg("--input").arg("-");
+        }
+
+        command
+            .arg(endpoint)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if payload.is_some() {
+            command.stdin(Stdio::piped());
+        }
+
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("failed to execute `gh api` for {method} {url}"))?;
+
+        if let Some(payload) = payload {
+            let body = serde_json::to_vec(payload).context("failed to encode GitHub payload")?;
+            let mut stdin = child
+                .stdin
+                .take()
+                .context("failed to open stdin for `gh api`")?;
+            stdin
+                .write_all(&body)
+                .context("failed to send payload to `gh api`")?;
+        }
+
+        child
+            .wait_with_output()
+            .with_context(|| format!("failed to wait for `gh api` response on {method} {url}"))
+    }
+}
+
+fn read_github_cli_token() -> Result<Option<String>> {
+    for path in github_cli_hosts_candidates() {
+        if !path.exists() {
+            continue;
+        }
+
+        if let Some(token) = read_github_cli_token_from_hosts(&path)? {
+            return Ok(Some(token));
+        }
+    }
+
+    Ok(None)
+}
+
+fn read_github_cli_token_from_hosts(path: &Path) -> Result<Option<String>> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read GitHub CLI hosts file at {}", path.display()))?;
+    let hosts: BTreeMap<String, GhHostEntry> =
+        serde_yaml::from_str(&content).with_context(|| {
+            format!(
+                "failed to parse GitHub CLI hosts file at {}",
+                path.display()
+            )
+        })?;
+
+    if let Some(token) = hosts
+        .get("github.com")
+        .and_then(|entry| entry.oauth_token.as_deref())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        return Ok(Some(token.to_string()));
+    }
+
+    Ok(hosts
+        .values()
+        .filter_map(|entry| entry.oauth_token.as_deref())
+        .map(str::trim)
+        .find(|token| !token.is_empty())
+        .map(ToOwned::to_owned))
+}
+
+fn github_cli_hosts_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(dir) = std::env::var("GH_CONFIG_DIR") {
+        let path = PathBuf::from(dir).join("hosts.yml");
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(dir).join("gh").join("hosts.yml");
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+
+    if let Some(dir) = dirs::config_dir() {
+        let path = dir.join("gh").join("hosts.yml");
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let path = home.join(".config").join("gh").join("hosts.yml");
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+
+    candidates
 }
 
 pub fn encrypt_for_github_secret(public_key_b64: &str, value: &str) -> Result<String> {
@@ -405,11 +640,40 @@ fn read_error(response: Response) -> anyhow::Error {
     anyhow!("GitHub API request failed with {status}: {body}")
 }
 
+fn gh_api_endpoint(url: &str) -> String {
+    url.strip_prefix(API_BASE).unwrap_or(url).to_string()
+}
+
+fn gh_output_indicates_status(output: &Output, status: u16) -> bool {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stderr.contains(&format!("HTTP {status}")) || stderr.contains(&format!("({status})"))
+}
+
+fn gh_api_error(method: &str, url: &str, output: &Output) -> anyhow::Error {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let body = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "<unavailable>".to_string()
+    };
+    anyhow!("GitHub CLI request failed for {method} {url}: {body}")
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{env, fs};
+
+    use tempfile::tempdir;
+
     use crate::session::{DeliverySession, encrypt_for_session};
 
-    use super::{GitHubClient, encrypt_for_github_secret};
+    use super::{
+        GitHubClient, encrypt_for_github_secret, gh_api_endpoint, github_cli_hosts_candidates,
+        read_github_cli_token_from_hosts,
+    };
 
     #[test]
     fn github_secret_encryption_is_compatible_with_session_sealed_box() {
@@ -431,5 +695,43 @@ mod tests {
     fn builds_client_with_direct_token() {
         let client = GitHubClient::new("fake-token");
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn reads_github_cli_token_from_hosts_file() {
+        let temp = tempdir().unwrap();
+        let hosts = temp.path().join("hosts.yml");
+        fs::write(
+            &hosts,
+            "github.com:\n  oauth_token: test-token\n  user: jhonacode\n",
+        )
+        .unwrap();
+
+        let token = read_github_cli_token_from_hosts(&hosts).unwrap();
+        assert_eq!(token.as_deref(), Some("test-token"));
+    }
+
+    #[test]
+    fn gh_config_dir_is_preferred_candidate() {
+        let temp = tempdir().unwrap();
+        let original = env::var_os("GH_CONFIG_DIR");
+        unsafe { env::set_var("GH_CONFIG_DIR", temp.path()) };
+
+        let candidates = github_cli_hosts_candidates();
+
+        match original {
+            Some(value) => unsafe { env::set_var("GH_CONFIG_DIR", value) },
+            None => unsafe { env::remove_var("GH_CONFIG_DIR") },
+        }
+
+        assert_eq!(candidates.first(), Some(&temp.path().join("hosts.yml")));
+    }
+
+    #[test]
+    fn strips_api_base_for_gh_cli_endpoints() {
+        assert_eq!(
+            gh_api_endpoint("https://api.github.com/repos/JhonaCodes/env-craft"),
+            "/repos/JhonaCodes/env-craft"
+        );
     }
 }
