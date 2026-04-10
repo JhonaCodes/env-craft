@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::{
@@ -69,6 +69,8 @@ struct LinkArgs {
 #[derive(Debug, Args)]
 struct SetArgs {
     logical_key: String,
+    #[arg(long)]
+    project: Option<String>,
     #[arg(long = "env")]
     environment: String,
     #[arg(long, default_value = ".")]
@@ -89,6 +91,8 @@ struct SetArgs {
 
 #[derive(Debug, Args)]
 struct GenerateArgs {
+    #[arg(long)]
+    project: Option<String>,
     #[arg(long = "env")]
     environment: String,
     #[arg(long, default_value = ".")]
@@ -103,6 +107,8 @@ struct GenerateArgs {
 
 #[derive(Debug, Args)]
 struct ListArgs {
+    #[arg(long)]
+    project: Option<String>,
     #[arg(long = "env")]
     environment: Option<String>,
     #[arg(long, default_value = ".")]
@@ -113,6 +119,8 @@ struct ListArgs {
 
 #[derive(Debug, Args)]
 struct DeliverArgs {
+    #[arg(long)]
+    project: Option<String>,
     #[arg(long = "env")]
     environment: String,
     #[arg(long, default_value = ".")]
@@ -124,6 +132,8 @@ struct DeliverArgs {
 #[derive(Debug, Args)]
 struct RevealArgs {
     logical_key: String,
+    #[arg(long)]
+    project: Option<String>,
     #[arg(long = "env")]
     environment: String,
     #[arg(long, default_value = ".")]
@@ -192,7 +202,7 @@ fn link(args: LinkArgs) -> Result<()> {
 fn set(args: SetArgs) -> Result<()> {
     let config = AppConfig::load()?;
     let root = args.root;
-    let mut schema = load_or_bail_schema(&root)?;
+    let mut schema = load_schema_for_write(&root, args.project.as_deref(), &args.environment)?;
     let value = match (args.generate, args.value) {
         (true, None) => generate_secret_like(&args.logical_key),
         (_, Some(value)) => value,
@@ -230,7 +240,7 @@ fn generate(args: GenerateArgs) -> Result<()> {
     let config = AppConfig::load()?;
     let github = GitHubClient::from_config(&config)?;
     let root = args.root;
-    let mut schema = load_or_bail_schema(&root)?;
+    let mut schema = load_schema_for_write(&root, args.project.as_deref(), &args.environment)?;
     let mut vars = generate_from_presets(&args.presets);
 
     for key in args.extra_keys {
@@ -276,7 +286,7 @@ fn generate(args: GenerateArgs) -> Result<()> {
 }
 
 fn list(args: ListArgs) -> Result<()> {
-    let schema = load_or_bail_schema(&args.root)?;
+    let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
     let remote_metadata = if args.remote {
         let config = AppConfig::load()?;
         let github = GitHubClient::from_config(&config)?;
@@ -326,7 +336,7 @@ fn list(args: ListArgs) -> Result<()> {
 fn pull(args: DeliverArgs) -> Result<()> {
     let config = AppConfig::load()?;
     let github = GitHubClient::from_config(&config)?;
-    let schema = load_or_bail_schema(&args.root)?;
+    let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
     let mut env_map = BTreeMap::new();
 
     for (logical_key, _) in schema.keys() {
@@ -355,7 +365,7 @@ fn pull(args: DeliverArgs) -> Result<()> {
 fn reveal(args: RevealArgs) -> Result<()> {
     let config = AppConfig::load()?;
     let github = GitHubClient::from_config(&config)?;
-    let schema = load_or_bail_schema(&args.root)?;
+    let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
 
     if !schema.vars.contains_key(&args.logical_key) {
         bail!("{} is not declared in .envcraft.schema", args.logical_key);
@@ -386,7 +396,7 @@ fn reveal(args: RevealArgs) -> Result<()> {
 fn deploy_inject(args: DeliverArgs) -> Result<()> {
     let config = AppConfig::load()?;
     let github = GitHubClient::from_config(&config)?;
-    let schema = load_or_bail_schema(&args.root)?;
+    let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
     let mut env_map = BTreeMap::new();
 
     for (logical_key, _) in schema.keys() {
@@ -420,14 +430,48 @@ fn deploy_inject(args: DeliverArgs) -> Result<()> {
     Ok(())
 }
 
-fn load_or_bail_schema(root: &Path) -> Result<ProjectSchema> {
-    ProjectSchema::load_from(root).with_context(|| {
+fn load_schema_for_read(root: &Path, project_override: Option<&str>) -> Result<ProjectSchema> {
+    let mut schema = ProjectSchema::load_from(root).with_context(|| {
         format!(
             "missing or invalid {} in {}",
             crate::schema::DEFAULT_SCHEMA_FILE,
             root.display()
         )
-    })
+    })?;
+
+    if let Some(project) = project_override {
+        schema.project = project.to_string();
+    }
+
+    Ok(schema)
+}
+
+fn load_schema_for_write(
+    root: &Path,
+    project_override: Option<&str>,
+    environment: &str,
+) -> Result<ProjectSchema> {
+    match ProjectSchema::load_from(root) {
+        Ok(mut schema) => {
+            if let Some(project) = project_override {
+                schema.project = project.to_string();
+            }
+            schema.ensure_environment(environment);
+            Ok(schema)
+        }
+        Err(error) => {
+            let project = project_override.ok_or_else(|| {
+                anyhow!(
+                    "missing .envcraft.schema in {}. Pass --project to create the context or run envcraft link first",
+                    root.display()
+                )
+            })?;
+            let mut schema = ProjectSchema::new(project.to_string(), [environment.to_string()]);
+            schema.ensure_environment(environment);
+            let _ = error;
+            Ok(schema)
+        }
+    }
 }
 
 fn write_dotenv(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
@@ -446,7 +490,7 @@ mod tests {
 
     use crate::{config::AppConfig, schema::ProjectSchema};
 
-    use super::write_dotenv;
+    use super::{load_schema_for_read, load_schema_for_write, write_dotenv};
 
     #[test]
     fn writes_dotenv_file() {
@@ -478,5 +522,23 @@ mod tests {
         let raw = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert!(raw.contains(".env"));
         assert!(raw.contains("!.envcraft.schema"));
+    }
+
+    #[test]
+    fn load_schema_for_read_supports_project_override() {
+        let dir = tempdir().unwrap();
+        let schema = ProjectSchema::new("nui-app", ["dev".to_string()]);
+        schema.save_to(dir.path()).unwrap();
+
+        let loaded = load_schema_for_read(dir.path(), Some("override-app")).unwrap();
+        assert_eq!(loaded.project, "override-app");
+    }
+
+    #[test]
+    fn load_schema_for_write_can_bootstrap_from_override() {
+        let dir = tempdir().unwrap();
+        let loaded = load_schema_for_write(dir.path(), Some("manual-project"), "prod").unwrap();
+        assert_eq!(loaded.project, "manual-project");
+        assert!(loaded.environments.contains("prod"));
     }
 }

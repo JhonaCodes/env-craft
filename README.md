@@ -2,6 +2,12 @@
 
 EnvCraft is a Rust 2024 CLI for managing environment variables across many projects while keeping **GitHub Secrets** as the only secret store.
 
+The intended usage model is:
+- install the `envcraft` binary globally
+- run `envcraft` from any project directory
+- let the current directory's `.envcraft.schema` resolve the project by default
+- use `--root` or `--project` only when you need to operate from somewhere else or recover from bad local context
+
 V1 goals in this repository:
 - bootstrap a central control-plane repo managed by EnvCraft
 - keep `.envcraft.schema` as the contract for each project
@@ -21,6 +27,8 @@ That keeps the system usable without additional public socket infrastructure whi
 ## Main commands
 
 ```bash
+cargo install --path .
+
 envcraft init \
   --github-owner JhonaCodes \
   --control-repo envcraft-secrets \
@@ -39,6 +47,9 @@ envcraft reveal DB_PASSWORD --env prod
 envcraft pull --env dev --output .env.dev
 
 envcraft deploy-inject --env prod > env.sh
+
+# Explicit override when running from another directory
+envcraft set DB_PASSWORD --env prod --project nui-app --root /path/to/nui-app --generate
 ```
 
 ## Control-plane bootstrap
