@@ -52,6 +52,22 @@ fn default_github_app_private_key_file_env_var() -> String {
     "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string()
 }
 
+fn default_runtime_github_owner_env_var() -> String {
+    "ENVCRAFT_GITHUB_OWNER".to_string()
+}
+
+fn default_runtime_control_repo_env_var() -> String {
+    "ENVCRAFT_CONTROL_REPO".to_string()
+}
+
+fn default_runtime_workflow_env_var() -> String {
+    "ENVCRAFT_DELIVER_WORKFLOW".to_string()
+}
+
+fn default_runtime_ref_env_var() -> String {
+    "ENVCRAFT_DEFAULT_REF".to_string()
+}
+
 impl AppConfig {
     pub fn control_repo_slug(&self) -> String {
         format!("{}/{}", self.github_owner, self.control_repo)
@@ -141,6 +157,45 @@ impl AppConfig {
         Ok(Some(Self::load()?))
     }
 
+    pub fn load_runtime() -> Result<Self> {
+        if let Some(config) = Self::load_optional()? {
+            return Ok(config);
+        }
+
+        Self::from_runtime_env()
+    }
+
+    pub fn from_runtime_env() -> Result<Self> {
+        let github_owner_env = default_runtime_github_owner_env_var();
+        let control_repo_env = default_runtime_control_repo_env_var();
+        let workflow_env = default_runtime_workflow_env_var();
+        let default_ref_env = default_runtime_ref_env_var();
+
+        let github_owner = std::env::var(&github_owner_env).with_context(|| {
+            format!(
+                "failed to read EnvCraft config and {github_owner_env} is not set. Run `envcraft init` locally or set {github_owner_env} / {control_repo_env} in CI"
+            )
+        })?;
+        let control_repo = std::env::var(&control_repo_env).with_context(|| {
+            format!(
+                "failed to read EnvCraft config and {control_repo_env} is not set. Run `envcraft init` locally or set {github_owner_env} / {control_repo_env} in CI"
+            )
+        })?;
+
+        Ok(Self {
+            github_owner,
+            control_repo,
+            deliver_workflow: std::env::var(&workflow_env)
+                .unwrap_or_else(|_| default_workflow_file()),
+            default_ref: std::env::var(&default_ref_env).unwrap_or_else(|_| default_branch()),
+            token_env_var: default_token_env_var(),
+            github_app_id_env_var: default_github_app_id_env_var(),
+            github_app_private_key_env_var: default_github_app_private_key_env_var(),
+            github_app_private_key_file_env_var: default_github_app_private_key_file_env_var(),
+            control_repo_local_path: None,
+        })
+    }
+
     pub fn write_gitignore_entries(repo_root: &Path) -> Result<()> {
         let gitignore_path = repo_root.join(".gitignore");
         let mut existing = if gitignore_path.exists() {
@@ -180,6 +235,7 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::AppConfig;
+    use tempfile::tempdir;
 
     #[test]
     fn builds_control_repo_slug() {
@@ -246,5 +302,28 @@ mod tests {
         }
 
         let _ = config;
+    }
+
+    #[test]
+    fn load_runtime_falls_back_to_env_when_file_is_missing() {
+        use std::env;
+
+        let home = tempdir().unwrap();
+        unsafe {
+            env::set_var("HOME", home.path());
+            env::set_var("ENVCRAFT_GITHUB_OWNER", "JhonaCodes");
+            env::set_var("ENVCRAFT_CONTROL_REPO", "envcraft-secrets");
+        }
+
+        let loaded = AppConfig::load_runtime().unwrap();
+        assert_eq!(loaded.github_owner, "JhonaCodes");
+        assert_eq!(loaded.control_repo, "envcraft-secrets");
+        assert_eq!(loaded.deliver_workflow, "deliver.yml");
+        assert_eq!(loaded.default_ref, "main");
+
+        unsafe {
+            env::remove_var("ENVCRAFT_GITHUB_OWNER");
+            env::remove_var("ENVCRAFT_CONTROL_REPO");
+        }
     }
 }

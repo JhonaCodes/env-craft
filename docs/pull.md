@@ -56,6 +56,9 @@ Interactive local usage:
 GitHub Actions usage:
 
 - prefer `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` or `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
+- if `~/.envcraft/config.toml` is not present in CI, also set:
+  - `ENVCRAFT_GITHUB_OWNER`
+  - `ENVCRAFT_CONTROL_REPO`
 - if the workflow is in a different private repo than the control-plane repo, install the GitHub App on the control-plane repo
 - `GITHUB_TOKEN` and `ENVCRAFT_GITHUB_TOKEN` remain legacy fallbacks
 
@@ -64,6 +67,8 @@ Example in GitHub Actions:
 ```yaml
 - name: Resolve build env with EnvCraft
   env:
+    ENVCRAFT_GITHUB_OWNER: my-org
+    ENVCRAFT_CONTROL_REPO: envcraft-secrets
     ENVCRAFT_GITHUB_APP_ID: ${{ secrets.ENVCRAFT_GITHUB_APP_ID }}
     ENVCRAFT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.ENVCRAFT_GITHUB_APP_PRIVATE_KEY }}
   run: |

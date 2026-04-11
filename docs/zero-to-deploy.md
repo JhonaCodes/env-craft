@@ -153,6 +153,8 @@ Workflow pattern:
 
 - name: Resolve build env
   env:
+    ENVCRAFT_GITHUB_OWNER: my-org
+    ENVCRAFT_CONTROL_REPO: envcraft-secrets
     ENVCRAFT_GITHUB_APP_ID: ${{ secrets.ENVCRAFT_GITHUB_APP_ID }}
     ENVCRAFT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.ENVCRAFT_GITHUB_APP_PRIVATE_KEY }}
   run: |

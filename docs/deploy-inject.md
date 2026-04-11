@@ -49,6 +49,9 @@ envcraft deploy-inject \
 
 - local shells usually do not need dedicated CI auth because EnvCraft can use your interactive GitHub auth
 - in GitHub Actions or another non-interactive CI environment, prefer `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` or `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
+- if `~/.envcraft/config.toml` is not present in that CI environment, also set:
+  - `ENVCRAFT_GITHUB_OWNER`
+  - `ENVCRAFT_CONTROL_REPO`
 - this is needed when that workflow must access a separate private control-plane repo such as `envcraft-secrets`
 - if a repository never runs EnvCraft in CI, it does not need these values
 

@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.9 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.10 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.9
+envcraft upgrade --version v0.1.10
 ```
 
 If `envcraft` is not found after installation:
@@ -244,6 +244,7 @@ Each requested logical key is resolved through a one-time GitHub Actions workflo
 CI note:
 - only repositories or workflows that run `envcraft` inside GitHub Actions against a private control-plane repo need dedicated non-interactive auth
 - prefer `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` or `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
+- if `~/.envcraft/config.toml` is not present in CI, also set `ENVCRAFT_GITHUB_OWNER` and `ENVCRAFT_CONTROL_REPO`
 - `ENVCRAFT_GITHUB_TOKEN` is a legacy fallback
 - local development usually does not need this because `envcraft` can use your interactive GitHub auth
 - repositories that never run EnvCraft in CI do not need to add these values
@@ -272,7 +273,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.9 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.10 bash
 ```
 
 Supported release assets:
@@ -280,7 +281,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.9`.
+To publish a release, push a semantic version tag such as `v0.1.10`.
 
 ## Control-plane bootstrap
 

@@ -65,6 +65,7 @@ Use --project and --root only when running from another directory.\n\n\
 CI auth: Only workflows that run EnvCraft inside GitHub Actions against a private control-plane repo \
 should prefer GitHub App credentials through ENVCRAFT_GITHUB_APP_ID plus \
 ENVCRAFT_GITHUB_APP_PRIVATE_KEY or ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE. \
+If ~/.envcraft/config.toml is not present in CI, set ENVCRAFT_GITHUB_OWNER and ENVCRAFT_CONTROL_REPO. \
 ENVCRAFT_GITHUB_TOKEN is a legacy fallback."
     )]
     Pull(PullArgs),
@@ -80,6 +81,7 @@ Use --project and --root only when running from another directory.\n\n\
 CI auth: Only workflows that run EnvCraft inside GitHub Actions against a private control-plane repo \
 should prefer GitHub App credentials through ENVCRAFT_GITHUB_APP_ID plus \
 ENVCRAFT_GITHUB_APP_PRIVATE_KEY or ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE. \
+If ~/.envcraft/config.toml is not present in CI, set ENVCRAFT_GITHUB_OWNER and ENVCRAFT_CONTROL_REPO. \
 ENVCRAFT_GITHUB_TOKEN is a legacy fallback."
     )]
     DeployInject(DeployInjectArgs),
@@ -222,7 +224,7 @@ struct GitHubAppConnectArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.9")]
+#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.10")]
 struct UpgradeArgs {
     #[arg(long)]
     version: Option<String>,
@@ -230,7 +232,7 @@ struct UpgradeArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft pull --env prod --project my_app --root . --output .env\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
+    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft pull --env prod --project my_app --root . --output .env\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  If ~/.envcraft/config.toml is not present, also set ENVCRAFT_GITHUB_OWNER and ENVCRAFT_CONTROL_REPO.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
 )]
 struct PullArgs {
     #[arg(
@@ -258,7 +260,7 @@ struct PullArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft deploy-inject --env prod > env.sh\n  envcraft deploy-inject --env prod --output /tmp/my-app-prod-env.sh\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
+    after_help = "Examples:\n  envcraft deploy-inject --env prod > env.sh\n  envcraft deploy-inject --env prod --output /tmp/my-app-prod-env.sh\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  If ~/.envcraft/config.toml is not present, also set ENVCRAFT_GITHUB_OWNER and ENVCRAFT_CONTROL_REPO.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
 )]
 struct DeployInjectArgs {
     #[arg(
@@ -398,7 +400,7 @@ fn link(args: LinkArgs) -> Result<()> {
 }
 
 fn set(args: SetArgs) -> Result<()> {
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let root = args.root;
     let mut schema = load_schema_for_write(&root, args.project.as_deref(), &args.environment)?;
     let mut value = match (args.generate, args.value) {
@@ -438,7 +440,7 @@ fn set(args: SetArgs) -> Result<()> {
 }
 
 fn generate(args: GenerateArgs) -> Result<()> {
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let github = GitHubClient::from_config(&config)?;
     let root = args.root;
     let mut schema = load_schema_for_write(&root, args.project.as_deref(), &args.environment)?;
@@ -494,7 +496,7 @@ fn generate(args: GenerateArgs) -> Result<()> {
 fn list(args: ListArgs) -> Result<()> {
     let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
     let remote_metadata = if args.remote {
-        let config = AppConfig::load()?;
+        let config = AppConfig::load_runtime()?;
         let github = GitHubClient::from_config(&config)?;
         let metadata = github.list_repo_secrets(&config.github_owner, &config.control_repo)?;
         Some(
@@ -537,7 +539,7 @@ fn list(args: ListArgs) -> Result<()> {
 }
 
 fn github_app_setup(args: GitHubAppSetupArgs) -> Result<()> {
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let result = setup_github_app(
         &config,
         args.install_mode,
@@ -607,7 +609,7 @@ fn github_app_setup(args: GitHubAppSetupArgs) -> Result<()> {
 }
 
 fn github_app_connect(args: GitHubAppConnectArgs) -> Result<()> {
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let result = connect_github_app(&config, &args.ci_repos)?;
     println!(
         "Using existing GitHub App {} ({})",
@@ -640,7 +642,7 @@ fn github_app_connect(args: GitHubAppConnectArgs) -> Result<()> {
 }
 
 fn github_app_status() -> Result<()> {
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let report = github_app_status_report(&config)?;
     let metadata = report.metadata;
     let owner_installation = report.owner_installation;
@@ -767,7 +769,7 @@ fn upgrade(args: UpgradeArgs) -> Result<()> {
 
 fn pull(args: PullArgs) -> Result<()> {
     purge_expired_sessions().ok();
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let github = GitHubClient::from_config(&config)?;
     let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
     let mut env_map = BTreeMap::new();
@@ -802,7 +804,7 @@ fn pull(args: PullArgs) -> Result<()> {
 
 fn reveal(args: RevealArgs) -> Result<()> {
     purge_expired_sessions().ok();
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let github = GitHubClient::from_config(&config)?;
     let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
 
@@ -839,7 +841,7 @@ fn reveal(args: RevealArgs) -> Result<()> {
 
 fn deploy_inject(args: DeployInjectArgs) -> Result<()> {
     purge_expired_sessions().ok();
-    let config = AppConfig::load()?;
+    let config = AppConfig::load_runtime()?;
     let github = GitHubClient::from_config(&config)?;
     let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
     let mut env_map = BTreeMap::new();
