@@ -32,6 +32,8 @@ pub struct StoredGitHubAppMetadata {
     pub install_url: String,
     pub html_url: Option<String>,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub ci_repos: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +41,16 @@ pub struct GitHubAppSetupResult {
     pub app_id: String,
     pub slug: String,
     pub install_url: String,
-    pub launcher_path: PathBuf,
+    pub launcher_path: Option<PathBuf>,
+    pub seeded_ci_repos: Vec<String>,
+    pub created: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitHubAppConnectResult {
+    pub app_id: String,
+    pub slug: String,
+    pub install_url: String,
     pub seeded_ci_repos: Vec<String>,
 }
 
@@ -62,12 +73,19 @@ struct GitHubAppManifest {
     default_permissions: BTreeMap<String, String>,
 }
 
-pub fn setup_github_app(
-    config: &AppConfig,
-    ci_repos: &[String],
-    open_browser: bool,
-) -> Result<GitHubAppSetupResult> {
+pub fn setup_github_app(config: &AppConfig, open_browser: bool) -> Result<GitHubAppSetupResult> {
     config.ensure_local_dirs()?;
+
+    if let Some(metadata) = load_stored_metadata(config)? {
+        return Ok(GitHubAppSetupResult {
+            app_id: metadata.app_id,
+            slug: metadata.slug,
+            install_url: metadata.install_url,
+            launcher_path: None,
+            seeded_ci_repos: Vec::new(),
+            created: false,
+        });
+    }
 
     let state = Uuid::new_v4().to_string();
     let callback_server = CallbackServer::bind()?;
@@ -83,15 +101,41 @@ pub fn setup_github_app(
     let response = exchange_manifest_code(&code)?;
     let install_url = format!("{GITHUB_WEB_BASE}/apps/{}/installations/new", response.slug);
 
-    persist_github_app(config, &response, &install_url)?;
-    let seeded_ci_repos =
-        seed_ci_repo_secrets(config, ci_repos, &response.id.to_string(), &response.pem)?;
-
+    let metadata = StoredGitHubAppMetadata {
+        app_id: response.id.to_string(),
+        slug: response.slug.clone(),
+        install_url: install_url.clone(),
+        html_url: response.html_url.clone(),
+        created_at: Utc::now(),
+        ci_repos: Vec::new(),
+    };
+    persist_github_app(config, &metadata, &response.pem)?;
     Ok(GitHubAppSetupResult {
         app_id: response.id.to_string(),
         slug: response.slug,
         install_url,
-        launcher_path,
+        launcher_path: Some(launcher_path),
+        seeded_ci_repos: Vec::new(),
+        created: true,
+    })
+}
+
+pub fn connect_github_app(
+    config: &AppConfig,
+    ci_repos: &[String],
+) -> Result<GitHubAppConnectResult> {
+    let mut metadata = load_stored_metadata(config)?.ok_or_else(|| {
+        anyhow!(
+            "no GitHub App is configured locally for {}. Run `envcraft github-app setup` first",
+            config.control_repo_slug()
+        )
+    })?;
+
+    let seeded_ci_repos = connect_ci_repos(config, &mut metadata, ci_repos)?;
+    Ok(GitHubAppConnectResult {
+        app_id: metadata.app_id,
+        slug: metadata.slug,
+        install_url: metadata.install_url,
         seeded_ci_repos,
     })
 }
@@ -189,25 +233,48 @@ fn owner_matches_authenticated_user(owner: &str) -> Result<bool> {
 
 fn persist_github_app(
     config: &AppConfig,
-    response: &ManifestConversionResponse,
-    install_url: &str,
+    metadata: &StoredGitHubAppMetadata,
+    private_key_pem: &str,
 ) -> Result<()> {
     let key_path = config.github_app_private_key_path()?;
     let metadata_path = config.github_app_metadata_path()?;
-    let metadata = StoredGitHubAppMetadata {
-        app_id: response.id.to_string(),
-        slug: response.slug.clone(),
-        install_url: install_url.to_string(),
-        html_url: response.html_url.clone(),
-        created_at: Utc::now(),
-    };
 
-    fs_sec::write_secret_file(&key_path, response.pem.as_bytes())?;
+    fs_sec::write_secret_file(&key_path, private_key_pem.as_bytes())?;
     fs_sec::write_secret_file(
         &metadata_path,
         toml::to_string_pretty(&metadata)?.as_bytes(),
     )?;
     Ok(())
+}
+
+fn connect_ci_repos(
+    config: &AppConfig,
+    metadata: &mut StoredGitHubAppMetadata,
+    ci_repos: &[String],
+) -> Result<Vec<String>> {
+    let private_key_path = config.github_app_private_key_path()?;
+    let private_key_pem = fs::read_to_string(&private_key_path).with_context(|| {
+        format!(
+            "failed to read stored GitHub App private key at {}",
+            private_key_path.display()
+        )
+    })?;
+
+    let seeded_ci_repos =
+        seed_ci_repo_secrets(config, ci_repos, &metadata.app_id, &private_key_pem)?;
+    if seeded_ci_repos.is_empty() {
+        return Ok(seeded_ci_repos);
+    }
+
+    for repo in &seeded_ci_repos {
+        if !metadata.ci_repos.iter().any(|existing| existing == repo) {
+            metadata.ci_repos.push(repo.clone());
+        }
+    }
+    metadata.ci_repos.sort();
+    metadata.ci_repos.dedup();
+    persist_github_app(config, metadata, &private_key_pem)?;
+    Ok(seeded_ci_repos)
 }
 
 fn seed_ci_repo_secrets(
@@ -257,7 +324,7 @@ fn resolve_ci_repo_target(
         let alternate = repo.replace('_', "-");
         if alternate != repo && github.get_repo(&owner, &alternate)?.is_some() {
             bail!(
-                "repository `{owner}/{repo}` was not found. Did you mean `{owner}/{alternate}`? Re-run `envcraft github-app setup --ci-repo {alternate}`"
+                "repository `{owner}/{repo}` was not found. Did you mean `{owner}/{alternate}`? Re-run `envcraft github-app connect --ci-repo {alternate}`"
             );
         }
     }
@@ -552,6 +619,7 @@ mod tests {
             install_url: "https://github.com/apps/envcraft/installations/new".to_string(),
             html_url: None,
             created_at: chrono::Utc::now(),
+            ci_repos: vec!["JhonaCodes/my-app".to_string()],
         };
         std::fs::write(&metadata_path, toml::to_string_pretty(&metadata).unwrap()).unwrap();
 
@@ -559,6 +627,7 @@ mod tests {
         let raw = std::fs::read_to_string(&metadata_path).unwrap();
         let parsed: StoredGitHubAppMetadata = toml::from_str(&raw).unwrap();
         assert_eq!(parsed.app_id, "12345");
+        assert_eq!(parsed.ci_repos, vec!["JhonaCodes/my-app".to_string()]);
         let _ = config;
         let _ = load_stored_metadata;
     }

@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.6 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.7 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.6
+envcraft upgrade --version v0.1.7
 ```
 
 If `envcraft` is not found after installation:
@@ -111,13 +111,14 @@ That keeps the system usable without additional public socket infrastructure whi
 
 ```bash
 envcraft init \
-  --github-owner JhonaCodes \
+  --github-owner my-org \
   --control-repo envcraft-secrets \
   --bootstrap-dir /path/to/envcraft-secrets
 
-envcraft github-app setup --ci-repo my-app
+envcraft github-app setup
+envcraft github-app connect --ci-repo another-app
 
-envcraft link --project nui-app --env dev --env prod
+envcraft link --project my_app --env dev --env prod
 
 envcraft set DB_PASSWORD --env prod --generate
 
@@ -134,7 +135,7 @@ envcraft pull --env dev --output .env.dev
 envcraft deploy-inject --env prod > env.sh
 
 # Explicit override when running from another directory
-envcraft set DB_PASSWORD --env prod --project nui-app --root /path/to/nui-app --generate
+envcraft set DB_PASSWORD --env prod --project my_app --root /path/to/my-app --generate
 ```
 
 For the complete command contract and more variants, use the docs in [`docs/`](docs/README.md).
@@ -166,7 +167,7 @@ Planned, but not part of the current implementation:
 
 ```bash
 envcraft init \
-  --github-owner JhonaCodes \
+  --github-owner my-org \
   --control-repo envcraft-secrets \
   --bootstrap-dir ~/code/envcraft-secrets
 ```
@@ -184,16 +185,22 @@ This single command now:
 To finish the CI auth path after `init`, run:
 
 ```bash
-envcraft github-app setup --ci-repo my-app
+envcraft github-app setup
 ```
 
-That command registers the GitHub App, stores the App ID and PEM locally, and can seed the CI repository secrets automatically.
+That command creates the GitHub App once and stores the App ID and PEM locally.
+
+To attach more CI repositories to the same app later, run:
+
+```bash
+envcraft github-app connect --ci-repo another-app
+```
 
 ### 2. Link an application repository
 
 ```bash
-cd ~/code/nui-app
-envcraft link --project nui-app --env dev --env prod
+cd ~/code/my-app
+envcraft link --project my_app --env dev --env prod
 ```
 
 That creates `.envcraft.schema`, which becomes the local contract for the repository.
@@ -246,7 +253,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.6 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.7 bash
 ```
 
 Supported release assets:
@@ -254,7 +261,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.6`.
+To publish a release, push a semantic version tag such as `v0.1.7`.
 
 ## Control-plane bootstrap
 
@@ -270,7 +277,7 @@ The generated workflow handles **single-key delivery**. `pull` and `deploy-injec
 Each application repo uses `.envcraft.schema`:
 
 ```yaml
-project: nui-app
+project: my_app
 environments:
   - dev
   - prod

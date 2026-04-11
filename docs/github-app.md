@@ -19,7 +19,8 @@ EnvCraft solves that by using:
 ## Command
 
 ```bash
-envcraft github-app setup --ci-repo my-app
+envcraft github-app setup
+envcraft github-app connect --ci-repo another-app
 ```
 
 Important:
@@ -28,26 +29,34 @@ Important:
 - for example `my-app`
 - that is different from the EnvCraft project slug `my_app`
 
-## What it does
+## What `setup` does
 
 - starts the GitHub App manifest flow locally
-- registers a new GitHub App from a manifest
+- registers one GitHub App from a manifest if none exists yet
 - stores the App ID and PEM under `~/.envcraft/github-apps/`
-- optionally writes these Actions secrets into the CI repos you pass:
+- prints the install URL for the new app
+
+If the app already exists locally, `setup` reuses it and only prints the existing app details.
+
+## What `connect` does
+
+- reuses the existing locally stored GitHub App
+- writes these Actions secrets into additional CI repos:
   - `ENVCRAFT_GITHUB_APP_ID`
   - `ENVCRAFT_GITHUB_APP_PRIVATE_KEY`
-- prints the install URL for the new app
+- updates the locally stored metadata so `status` can list connected repos
 
 ## What you still need to do
 
 After `envcraft github-app setup` completes:
 
 1. Open the install URL printed by EnvCraft.
-2. Install the app on the control-plane repo, for example `JhonaCodes/envcraft-secrets`.
-3. Confirm the CI repo now has:
+2. Install the app on the control-plane repo, for example `my-org/envcraft-secrets`.
+3. Run `envcraft github-app connect --ci-repo my-app`.
+4. Confirm the CI repo now has:
    - `ENVCRAFT_GITHUB_APP_ID`
    - `ENVCRAFT_GITHUB_APP_PRIVATE_KEY`
-4. Run:
+5. Run:
 
 ```bash
 envcraft github-app status
@@ -56,8 +65,10 @@ envcraft github-app status
 ## Canonical example
 
 ```bash
-envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets
-envcraft github-app setup --ci-repo my-app
+envcraft init --github-owner my-org --control-repo envcraft-secrets
+envcraft github-app setup
+envcraft github-app connect --ci-repo my-app
+envcraft github-app connect --ci-repo another-app
 envcraft github-app status
 ```
 
@@ -80,9 +91,20 @@ EnvCraft stores the local GitHub App credentials here:
 
 Those files are for local reuse only. CI should still use repository secrets.
 
+## What `status` shows
+
+`envcraft github-app status` shows:
+
+- the stored App ID
+- the stored slug
+- the install URL
+- the local private key path
+- the CI repositories already connected through `connect`
+
 ## Common mistakes
 
 - Assuming every repo needs GitHub App secrets. Only repos that run EnvCraft in CI need them.
+- Running `setup` as if it should create a separate GitHub App per project. EnvCraft should use one app per control plane, then `connect` more repos to it.
 - Installing the app on the CI repo but not the control-plane repo.
 - Keeping only `ENVCRAFT_GITHUB_TOKEN` and forgetting to migrate the workflow env vars.
 - Expecting `envcraft init` alone to finish CI auth. `init` bootstraps the control plane; `github-app setup` finishes the CI auth path.

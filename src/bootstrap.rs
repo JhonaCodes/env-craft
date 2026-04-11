@@ -145,19 +145,25 @@ Recommended flow:
 1. From any machine with EnvCraft configured for this control plane, run:
 
    ```bash
-   envcraft github-app setup --ci-repo <repo-that-runs-envcraft-in-ci>
+   envcraft github-app setup
    ```
 
 2. EnvCraft will:
-   - register a GitHub App from a manifest
+   - register one GitHub App from a manifest if it does not already exist
    - store the App ID and PEM locally under `~/.envcraft/github-apps/`
-   - optionally seed `{app_id_env}` and `{app_key_env}` into the CI repositories you pass with `--ci-repo`
+   - stores the app locally so it can be reused later
 
-3. Open the install URL printed by EnvCraft and install the app on:
+3. To connect more CI repositories later, run:
+
+   ```bash
+   envcraft github-app connect --ci-repo <repo-that-runs-envcraft-in-ci>
+   ```
+
+4. Open the install URL printed by EnvCraft and install the app on:
 
    - `{control_repo}`
 
-4. Re-run:
+5. Re-run:
 
    ```bash
    envcraft github-app status

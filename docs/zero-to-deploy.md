@@ -35,7 +35,7 @@ EnvCraft usually deals with two different names:
 Run this once:
 
 ```bash
-envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets
+envcraft init --github-owner my-org --control-repo envcraft-secrets
 ```
 
 This does:
@@ -53,22 +53,25 @@ After this, the control plane exists, but CI auth is not finished yet.
 Run:
 
 ```bash
-envcraft github-app setup --ci-repo my-app
+envcraft github-app setup
 ```
 
 This does:
 
 - starts the GitHub App manifest flow
-- registers a GitHub App
+- registers one GitHub App for this control plane
 - stores the App ID and PEM locally under `~/.envcraft/github-apps/`
-- writes these Actions secrets into the CI repository:
-  - `ENVCRAFT_GITHUB_APP_ID`
-  - `ENVCRAFT_GITHUB_APP_PRIVATE_KEY`
+
+To connect more CI repositories to the same app later:
+
+```bash
+envcraft github-app connect --ci-repo my-app
+```
 
 Then do the one manual GitHub step that cannot be skipped:
 
 - open the install URL printed by EnvCraft
-- install the GitHub App on `JhonaCodes/envcraft-secrets`
+- install the GitHub App on `my-org/envcraft-secrets`
 
 Validate:
 
@@ -219,15 +222,17 @@ Use `deploy-inject` when:
 
 If you want the shortest possible proof that EnvCraft works:
 
-1. `envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets`
-2. `envcraft github-app setup --ci-repo my-app`
-3. install the GitHub App on `JhonaCodes/envcraft-secrets`
-4. `cd /path/to/my_app`
-5. `envcraft link --project my_app --env dev --env prod`
-6. `envcraft set API_BASE_URL --env prod`
-7. `envcraft reveal API_BASE_URL --env prod`
-8. wire `envcraft pull --env prod --output .env` into GitHub Actions
-9. run one successful build
+1. `envcraft init --github-owner my-org --control-repo envcraft-secrets`
+2. `envcraft github-app setup`
+3. `envcraft github-app connect --ci-repo my-app` when the first CI repo needs the app
+4. `envcraft github-app connect --ci-repo another-app` when another CI repo needs the same app
+5. install the GitHub App on `my-org/envcraft-secrets`
+6. `cd /path/to/my_app`
+7. `envcraft link --project my_app --env dev --env prod`
+8. `envcraft set API_BASE_URL --env prod`
+9. `envcraft reveal API_BASE_URL --env prod`
+10. wire `envcraft pull --env prod --output .env` into GitHub Actions
+11. run one successful build
 
 For a remote-server proof:
 
@@ -242,6 +247,7 @@ For a remote-server proof:
 - Using `my_app` as the GitHub repo slug in `--ci-repo`
 - Using `my-app` as the EnvCraft project slug in `--project`
 - Assuming `init` also finishes CI auth
+- Creating a new GitHub App for every project instead of using `connect` to attach more CI repos
 - Forgetting to install the GitHub App on the control-plane repo after `github-app setup`
 - Using `deploy-inject` in a `Dockerfile`
 - Expecting `pull` to mutate secrets; it only reads through GitHub Actions

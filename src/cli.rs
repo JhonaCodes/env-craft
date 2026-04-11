@@ -14,7 +14,7 @@ use crate::{
     config::AppConfig,
     fs_sec,
     github::GitHubClient,
-    github_app::{load_stored_metadata, setup_github_app},
+    github_app::{connect_github_app, load_stored_metadata, setup_github_app},
     schema::ProjectSchema,
     secrets::{StackPreset, generate_from_presets, generate_secret_like},
     session::{DeliverySession, purge_expired_sessions},
@@ -86,17 +86,22 @@ ENVCRAFT_GITHUB_TOKEN is a legacy fallback."
 #[derive(Debug, Subcommand)]
 enum GitHubAppCommand {
     #[command(
-        about = "Create the EnvCraft GitHub App through the manifest flow and optionally seed CI secrets",
-        after_help = "Examples:\n  envcraft github-app setup --ci-repo my-app\n  envcraft github-app setup --ci-repo my-org/my-app --ci-repo another-repo --no-open"
+        about = "Create or reuse the EnvCraft GitHub App for this control plane",
+        after_help = "Examples:\n  envcraft github-app setup\n  envcraft github-app setup --no-open"
     )]
     Setup(GitHubAppSetupArgs),
+    #[command(
+        about = "Connect additional CI repositories to the existing EnvCraft GitHub App",
+        after_help = "Examples:\n  envcraft github-app connect --ci-repo my-app\n  envcraft github-app connect --ci-repo my-org/my-app --ci-repo another-repo"
+    )]
+    Connect(GitHubAppConnectArgs),
     #[command(about = "Show the locally stored GitHub App status and CI secret names")]
     Status,
 }
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Example:\n  envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets --bootstrap-dir ~/code/envcraft-secrets"
+    after_help = "Example:\n  envcraft init --github-owner my-org --control-repo envcraft-secrets --bootstrap-dir ~/code/envcraft-secrets"
 )]
 struct InitArgs {
     #[arg(long)]
@@ -114,7 +119,7 @@ struct InitArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Example:\n  envcraft link --project nui-app --env dev --env prod")]
+#[command(after_help = "Example:\n  envcraft link --project my_app --env dev --env prod")]
 struct LinkArgs {
     #[arg(long)]
     project: String,
@@ -126,7 +131,7 @@ struct LinkArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft set DB_PASSWORD --env prod --generate\n  envcraft set STRIPE_SECRET_KEY --env prod --project billing-api --root ~/code/billing-api"
+    after_help = "Examples:\n  envcraft set DB_PASSWORD --env prod --generate\n  envcraft set STRIPE_SECRET_KEY --env prod --project my_api --root ~/code/my-api"
 )]
 struct SetArgs {
     logical_key: String,
@@ -185,11 +190,6 @@ struct ListArgs {
 #[derive(Debug, Args)]
 struct GitHubAppSetupArgs {
     #[arg(
-        long = "ci-repo",
-        help = "Repository that should receive ENVCRAFT_GITHUB_APP_ID and ENVCRAFT_GITHUB_APP_PRIVATE_KEY as Actions secrets. Accepts repo or owner/repo."
-    )]
-    ci_repos: Vec<String>,
-    #[arg(
         long,
         default_value_t = false,
         help = "Do not try to open the GitHub App registration page automatically"
@@ -198,7 +198,17 @@ struct GitHubAppSetupArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.6")]
+struct GitHubAppConnectArgs {
+    #[arg(
+        long = "ci-repo",
+        required = true,
+        help = "Repository that should receive ENVCRAFT_GITHUB_APP_ID and ENVCRAFT_GITHUB_APP_PRIVATE_KEY as Actions secrets. Accepts repo or owner/repo."
+    )]
+    ci_repos: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.7")]
 struct UpgradeArgs {
     #[arg(long)]
     version: Option<String>,
@@ -291,6 +301,7 @@ pub fn run(cli: Cli) -> Result<()> {
 fn github_app(command: GitHubAppCommand) -> Result<()> {
     match command {
         GitHubAppCommand::Setup(args) => github_app_setup(args),
+        GitHubAppCommand::Connect(args) => github_app_connect(args),
         GitHubAppCommand::Status => github_app_status(),
     }
 }
@@ -342,7 +353,7 @@ fn init(args: InitArgs) -> Result<()> {
         println!("  wrote {}", file.display());
     }
     println!(
-        "Next CI auth step: run `envcraft github-app setup --ci-repo <repo>` to create the GitHub App and seed {} / {} in your CI repositories.",
+        "Next CI auth step: run `envcraft github-app setup` to create the GitHub App once, then `envcraft github-app connect --ci-repo <repo>` to seed {} / {} into each CI repository.",
         config.github_app_id_env_var, config.github_app_private_key_env_var
     );
 
@@ -513,26 +524,43 @@ fn list(args: ListArgs) -> Result<()> {
 
 fn github_app_setup(args: GitHubAppSetupArgs) -> Result<()> {
     let config = AppConfig::load()?;
-    let result = setup_github_app(&config, &args.ci_repos, !args.no_open)?;
-    println!("Registered GitHub App {} ({})", result.slug, result.app_id);
-    println!("Launcher page: {}", result.launcher_path.display());
-    println!("Install URL: {}", result.install_url);
-    if result.seeded_ci_repos.is_empty() {
-        println!(
-            "No CI repos were seeded automatically. Store {} and {} in every CI repository that runs EnvCraft.",
-            config.github_app_id_env_var, config.github_app_private_key_env_var
-        );
+    let result = setup_github_app(&config, !args.no_open)?;
+    if result.created {
+        println!("Registered GitHub App {} ({})", result.slug, result.app_id);
+        if let Some(path) = result.launcher_path {
+            println!("Launcher page: {}", path.display());
+        }
     } else {
         println!(
-            "Seeded {} and {} in: {}",
-            config.github_app_id_env_var,
-            config.github_app_private_key_env_var,
-            result.seeded_ci_repos.join(", ")
+            "Using existing GitHub App {} ({})",
+            result.slug, result.app_id
         );
     }
+    println!("Install URL: {}", result.install_url);
+    println!(
+        "Next step: use `envcraft github-app connect --ci-repo <repo>` to seed {} and {} into each CI repository that runs EnvCraft.",
+        config.github_app_id_env_var, config.github_app_private_key_env_var
+    );
     println!(
         "Install the app on {} so EnvCraft can mint installation tokens for the control plane.",
         config.control_repo_slug()
+    );
+    Ok(())
+}
+
+fn github_app_connect(args: GitHubAppConnectArgs) -> Result<()> {
+    let config = AppConfig::load()?;
+    let result = connect_github_app(&config, &args.ci_repos)?;
+    println!(
+        "Using existing GitHub App {} ({})",
+        result.slug, result.app_id
+    );
+    println!("Install URL: {}", result.install_url);
+    println!(
+        "Seeded {} and {} in: {}",
+        config.github_app_id_env_var,
+        config.github_app_private_key_env_var,
+        result.seeded_ci_repos.join(", ")
     );
     Ok(())
 }
@@ -554,12 +582,15 @@ fn github_app_status() -> Result<()> {
                 "stored private key: {}",
                 config.github_app_private_key_path()?.display()
             );
+            if metadata.ci_repos.is_empty() {
+                println!("connected CI repos: none");
+            } else {
+                println!("connected CI repos: {}", metadata.ci_repos.join(", "));
+            }
         }
         None => {
             println!("stored app id: not configured");
-            println!(
-                "run `envcraft github-app setup --ci-repo <repo>` to create and store the GitHub App locally"
-            );
+            println!("run `envcraft github-app setup` to create and store the GitHub App locally");
         }
     }
 

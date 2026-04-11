@@ -32,14 +32,14 @@ envcraft init --github-owner <owner> --control-repo <repo>
 Bootstrap with default local clone path:
 
 ```bash
-envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets
+envcraft init --github-owner my-org --control-repo envcraft-secrets
 ```
 
 Bootstrap with an explicit local checkout path:
 
 ```bash
 envcraft init \
-  --github-owner JhonaCodes \
+  --github-owner my-org \
   --control-repo envcraft-secrets \
   --bootstrap-dir ~/code/envcraft-secrets
 ```
@@ -52,10 +52,10 @@ envcraft init \
 - writes `envcraft-deliver.mjs`
 - writes GitHub App setup notes under `.envcraft/`
 - commits and pushes bootstrap changes if needed
-- prints the next-step command for CI auth: `envcraft github-app setup`
+- prints the next-step commands for CI auth: `envcraft github-app setup`, then `envcraft github-app connect`
 
 ## Common mistakes
 
 - assuming `init` links an application repo; that is `envcraft link`
-- assuming `init` finishes CI auth by itself; use `envcraft github-app setup` next
+- assuming `init` finishes CI auth by itself; use `envcraft github-app setup` next, then `envcraft github-app connect` for additional CI repos
 - assuming `init` creates app secrets; that is `envcraft set`
