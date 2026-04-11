@@ -7,14 +7,16 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
+use zeroize::Zeroize;
 
 use crate::{
     bootstrap::bootstrap_control_plane,
     config::AppConfig,
+    fs_sec,
     github::GitHubClient,
     schema::ProjectSchema,
     secrets::{StackPreset, generate_from_presets, generate_secret_like},
-    session::DeliverySession,
+    session::{DeliverySession, purge_expired_sessions},
     upgrade::upgrade_binary,
 };
 
@@ -46,14 +48,28 @@ enum Command {
     List(ListArgs),
     #[command(about = "Download the latest EnvCraft release and replace the current binary")]
     Upgrade(UpgradeArgs),
-    #[command(about = "Resolve every declared key for one environment into a local .env file")]
-    Pull(DeliverArgs),
+    #[command(
+        about = "Resolve every declared key for one environment into a local .env file",
+        long_about = "Resolve every declared key for one environment into a local .env file.\n\n\
+Context: EnvCraft resolves the active project from the current directory's .envcraft.schema by default. \
+Use --project and --root only when running from another directory.\n\n\
+CI auth: Only workflows that run EnvCraft inside GitHub Actions against a private control-plane repo \
+need a dedicated token such as ENVCRAFT_GITHUB_TOKEN. Local interactive shells usually do not."
+    )]
+    Pull(PullArgs),
     #[command(about = "Reveal one logical key through a one-time GitHub Actions delivery flow")]
     Reveal(RevealArgs),
     #[command(
-        about = "Emit shell exports for deploy-time injection without baking secrets into images"
+        about = "Emit shell exports for deploy-time injection without baking secrets into images",
+        long_about = "Emit shell exports for deploy-time injection without baking secrets into images.\n\n\
+Use this for prestart hooks, remote servers, Dokploy init hooks, or CI steps that need runtime exports. \
+Do not use it inside Dockerfile build stages.\n\n\
+Context: EnvCraft resolves the active project from the current directory's .envcraft.schema by default. \
+Use --project and --root only when running from another directory.\n\n\
+CI auth: Only workflows that run EnvCraft inside GitHub Actions against a private control-plane repo \
+need a dedicated token such as ENVCRAFT_GITHUB_TOKEN. Local interactive shells usually do not."
     )]
-    DeployInject(DeliverArgs),
+    DeployInject(DeployInjectArgs),
 }
 
 #[derive(Debug, Args)]
@@ -153,16 +169,54 @@ struct UpgradeArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft deploy-inject --env prod > env.sh"
+    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft pull --env prod --project acordio_app --root . --output .env\n\nCI note:\n  Only GitHub Actions workflows that need access to a private control-plane repo require\n  a token such as ENVCRAFT_GITHUB_TOKEN."
 )]
-struct DeliverArgs {
-    #[arg(long)]
+struct PullArgs {
+    #[arg(
+        long,
+        help = "Override the project name when running outside the linked repository"
+    )]
     project: Option<String>,
-    #[arg(long = "env")]
+    #[arg(
+        long = "env",
+        help = "Environment profile to resolve, for example dev or prod"
+    )]
     environment: String,
-    #[arg(long, default_value = ".")]
+    #[arg(
+        long,
+        default_value = ".",
+        help = "Repository root that contains .envcraft.schema"
+    )]
     root: PathBuf,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Write the resolved .env payload to this file instead of the default .env.<env> path"
+    )]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+#[command(
+    after_help = "Examples:\n  envcraft deploy-inject --env prod > env.sh\n  envcraft deploy-inject --env prod --output /tmp/acordio-prod-env.sh\n\nCI note:\n  Only GitHub Actions workflows that need access to a private control-plane repo require\n  a token such as ENVCRAFT_GITHUB_TOKEN."
+)]
+struct DeployInjectArgs {
+    #[arg(
+        long,
+        help = "Override the project name when running outside the linked repository"
+    )]
+    project: Option<String>,
+    #[arg(
+        long = "env",
+        help = "Environment profile to resolve, for example dev or prod"
+    )]
+    environment: String,
+    #[arg(
+        long,
+        default_value = ".",
+        help = "Repository root that contains .envcraft.schema"
+    )]
+    root: PathBuf,
+    #[arg(long, help = "Write the export script to this file instead of stdout")]
     output: Option<PathBuf>,
 }
 
@@ -270,7 +324,7 @@ fn set(args: SetArgs) -> Result<()> {
     let config = AppConfig::load()?;
     let root = args.root;
     let mut schema = load_schema_for_write(&root, args.project.as_deref(), &args.environment)?;
-    let value = match (args.generate, args.value) {
+    let mut value = match (args.generate, args.value) {
         (true, None) => generate_secret_like(&args.logical_key),
         (_, Some(value)) => value,
         (false, None) => rpassword::prompt_password(format!(
@@ -297,6 +351,7 @@ fn set(args: SetArgs) -> Result<()> {
         &secret_name,
         &value,
     )?;
+    value.zeroize();
     let path = schema.save_to(&root)?;
     let synced_path = sync_control_plane_project_schema(&config, &schema)?;
     println!("Stored {}", secret_name);
@@ -343,13 +398,16 @@ fn generate(args: GenerateArgs) -> Result<()> {
         }
     }
 
+    let count = vars.len();
+    for (_, value) in vars.iter_mut() {
+        value.zeroize();
+    }
+
     let path = schema.save_to(&root)?;
     let synced_path = sync_control_plane_project_schema(&config, &schema)?;
     println!(
         "Generated {} secrets for {}:{}",
-        vars.len(),
-        schema.project,
-        args.environment
+        count, schema.project, args.environment
     );
     println!("Schema updated at {}", path.display());
     println!("Control-plane schema synced at {}", synced_path.display());
@@ -413,7 +471,8 @@ fn upgrade(args: UpgradeArgs) -> Result<()> {
     Ok(())
 }
 
-fn pull(args: DeliverArgs) -> Result<()> {
+fn pull(args: PullArgs) -> Result<()> {
+    purge_expired_sessions().ok();
     let config = AppConfig::load()?;
     let github = GitHubClient::from_config(&config)?;
     let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
@@ -431,6 +490,7 @@ fn pull(args: DeliverArgs) -> Result<()> {
             logical_key,
             &secret_name,
         )?;
+        session.delete_from_disk().ok();
         env_map.insert(logical_key.clone(), value);
     }
 
@@ -438,11 +498,16 @@ fn pull(args: DeliverArgs) -> Result<()> {
         .output
         .unwrap_or_else(|| args.root.join(format!(".env.{}", args.environment)));
     write_dotenv(&output, &env_map)?;
-    println!("Pulled {} secrets into {}", env_map.len(), output.display());
+    let count = env_map.len();
+    for (_, value) in env_map.iter_mut() {
+        value.zeroize();
+    }
+    println!("Pulled {} secrets into {}", count, output.display());
     Ok(())
 }
 
 fn reveal(args: RevealArgs) -> Result<()> {
+    purge_expired_sessions().ok();
     let config = AppConfig::load()?;
     let github = GitHubClient::from_config(&config)?;
     let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
@@ -454,7 +519,7 @@ fn reveal(args: RevealArgs) -> Result<()> {
     let session = DeliverySession::new();
     session.save()?;
     let secret_name = schema.secret_name_for(&args.logical_key, &args.environment);
-    let value = github.fetch_secret_via_delivery(
+    let mut value = github.fetch_secret_via_delivery(
         &config,
         &session,
         &schema.project,
@@ -464,16 +529,19 @@ fn reveal(args: RevealArgs) -> Result<()> {
     )?;
 
     if let Some(path) = args.output {
-        fs::write(&path, format!("{}={}\n", args.logical_key, value))?;
+        fs_sec::write_secret_file(&path, format!("{}={}\n", args.logical_key, value).as_bytes())?;
         println!("Wrote reveal output to {}", path.display());
     } else {
         println!("{value}");
     }
 
+    value.zeroize();
+    session.delete_from_disk().ok();
     Ok(())
 }
 
-fn deploy_inject(args: DeliverArgs) -> Result<()> {
+fn deploy_inject(args: DeployInjectArgs) -> Result<()> {
+    purge_expired_sessions().ok();
     let config = AppConfig::load()?;
     let github = GitHubClient::from_config(&config)?;
     let schema = load_schema_for_read(&args.root, args.project.as_deref())?;
@@ -491,22 +559,28 @@ fn deploy_inject(args: DeliverArgs) -> Result<()> {
             logical_key,
             &secret_name,
         )?;
+        session.delete_from_disk().ok();
         env_map.insert(logical_key.clone(), value);
     }
 
-    let shell_output = env_map
+    let mut shell_output = env_map
         .iter()
         .map(|(key, value)| format!("export {}='{}'", key, value.replace('\'', "'\"'\"'")))
         .collect::<Vec<_>>()
         .join("\n");
 
+    for (_, value) in env_map.iter_mut() {
+        value.zeroize();
+    }
+
     if let Some(path) = args.output {
-        fs::write(&path, format!("{shell_output}\n"))?;
+        fs_sec::write_secret_file(&path, format!("{shell_output}\n").as_bytes())?;
         println!("Wrote deploy injection script to {}", path.display());
     } else {
         println!("{shell_output}");
     }
 
+    shell_output.zeroize();
     Ok(())
 }
 
@@ -560,7 +634,7 @@ fn write_dotenv(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(path, format!("{body}\n"))?;
+    fs_sec::write_secret_file(path, format!("{body}\n").as_bytes())?;
     Ok(())
 }
 
@@ -767,5 +841,27 @@ mod tests {
         let loaded = load_schema_for_write(dir.path(), Some("manual-project"), "prod").unwrap();
         assert_eq!(loaded.project, "manual-project");
         assert!(loaded.environments.contains("prod"));
+    }
+
+    #[test]
+    fn writes_dotenv_with_restrictive_permissions() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".env.test");
+        let values = std::collections::BTreeMap::from([
+            ("SECRET_A".to_string(), "value_a".to_string()),
+            ("SECRET_B".to_string(), "value_b".to_string()),
+        ]);
+
+        write_dotenv(&path, &values).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("SECRET_A=value_a"));
+        assert!(raw.contains("SECRET_B=value_b"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "dotenv file should be owner-only (0o600)");
+        }
     }
 }

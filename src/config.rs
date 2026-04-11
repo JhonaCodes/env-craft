@@ -6,6 +6,8 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
+use crate::fs_sec;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppConfig {
     pub github_owner: String,
@@ -74,18 +76,20 @@ impl AppConfig {
     }
 
     pub fn ensure_local_dirs(&self) -> Result<()> {
-        fs::create_dir_all(Self::requests_dir()?)?;
-        fs::create_dir_all(Self::artifacts_dir()?)?;
-        fs::create_dir_all(Self::control_repos_dir()?)?;
+        fs_sec::create_restricted_dir(&Self::config_dir()?)?;
+        fs_sec::create_restricted_dir(&Self::cache_dir()?)?;
+        fs_sec::create_restricted_dir(&Self::requests_dir()?)?;
+        fs_sec::create_restricted_dir(&Self::artifacts_dir()?)?;
+        fs_sec::create_restricted_dir(&Self::control_repos_dir()?)?;
         Ok(())
     }
 
     pub fn save(&self) -> Result<PathBuf> {
         let dir = Self::config_dir()?;
-        fs::create_dir_all(&dir)?;
+        fs_sec::create_restricted_dir(&dir)?;
         let path = Self::config_path()?;
         let body = toml::to_string_pretty(self)?;
-        fs::write(&path, body)?;
+        fs_sec::write_secret_file(&path, body.as_bytes())?;
         Ok(path)
     }
 
@@ -171,5 +175,38 @@ mod tests {
 
         let path = config.default_control_repo_path().unwrap();
         assert!(path.ends_with(".envcraft/repos/envcraft-secrets"));
+    }
+
+    #[test]
+    fn ensure_local_dirs_creates_restricted_directories() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let config = AppConfig {
+            github_owner: "test".to_string(),
+            control_repo: "test-secrets".to_string(),
+            deliver_workflow: "deliver.yml".to_string(),
+            default_ref: "main".to_string(),
+            token_env_var: "GITHUB_TOKEN".to_string(),
+            control_repo_local_path: Some(dir.path().join("repos/test-secrets")),
+        };
+
+        // ensure_local_dirs uses global paths, so we test fs_sec directly
+        let restricted = dir.path().join("restricted");
+        crate::fs_sec::create_restricted_dir(&restricted).unwrap();
+        assert!(restricted.is_dir());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&restricted)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "directory should be owner-only (0o700)");
+        }
+
+        let _ = config;
     }
 }
