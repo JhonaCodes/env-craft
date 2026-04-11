@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.3 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.4 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.3
+envcraft upgrade --version v0.1.4
 ```
 
 If `envcraft` is not found after installation:
@@ -181,7 +181,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.3 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.4 bash
 ```
 
 Supported release assets:
@@ -189,7 +189,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.3`.
+To publish a release, push a semantic version tag such as `v0.1.4`.
 
 ## Control-plane bootstrap
 

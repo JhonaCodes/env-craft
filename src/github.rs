@@ -21,6 +21,7 @@ use zip::ZipArchive;
 use crate::{
     config::AppConfig,
     session::{DeliveryEnvelope, DeliverySession},
+    ui::ProgressSpinner,
 };
 
 const API_BASE: &str = "https://api.github.com";
@@ -296,11 +297,13 @@ impl GitHubClient {
         repo: &str,
         request_id: uuid::Uuid,
         timeout: Duration,
+        spinner: &mut ProgressSpinner,
     ) -> Result<Artifact> {
         let started = Instant::now();
         let target_name = format!("envcraft-{request_id}");
 
         while started.elapsed() < timeout {
+            spinner.tick();
             let payload: ArtifactListResponse = self.get_json(&format!(
                 "{API_BASE}/repos/{owner}/{repo}/actions/artifacts"
             ))?;
@@ -348,36 +351,72 @@ impl GitHubClient {
         logical_key: &str,
         secret_name: &str,
     ) -> Result<String> {
-        self.dispatch_delivery(
+        let mut spinner = ProgressSpinner::new(format!(
+            "Waiting for GitHub Actions to deliver {environment}/{logical_key}"
+        ));
+        if let Err(error) = self.dispatch_delivery(
             config,
             session,
             project,
             environment,
             logical_key,
             secret_name,
-        )?;
+        ) {
+            spinner.fail(&format!("Failed to dispatch {environment}/{logical_key}"));
+            return Err(error);
+        }
 
-        let artifact = self.wait_for_delivery_artifact(
+        let artifact = match self.wait_for_delivery_artifact(
             &config.github_owner,
             &config.control_repo,
             session.request_id,
             session.ttl(),
-        )?;
-        let envelope = self.download_delivery_envelope(
+            &mut spinner,
+        ) {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                spinner.fail(&format!("Timed out waiting for {environment}/{logical_key}"));
+                return Err(error);
+            }
+        };
+        let envelope = match self.download_delivery_envelope(
             &config.github_owner,
             &config.control_repo,
             artifact.id,
-        )?;
+        ) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                spinner.fail(&format!("Failed to download {environment}/{logical_key}"));
+                return Err(error);
+            }
+        };
         if envelope.request_id != session.request_id {
+            spinner.fail(&format!("Received mismatched payload for {environment}/{logical_key}"));
             bail!("received mismatched delivery response");
         }
-        let payload = session.decrypt_payload(&envelope.encrypted_payload)?;
+        let payload = match session.decrypt_payload(&envelope.encrypted_payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                spinner.fail(&format!("Failed to decrypt {environment}/{logical_key}"));
+                return Err(error);
+            }
+        };
         #[derive(Deserialize)]
         struct RevealedPayload {
             value: String,
         }
-        let payload: RevealedPayload =
-            serde_json::from_str(&payload).context("failed to parse decrypted payload")?;
+        let payload: RevealedPayload = match serde_json::from_str(&payload)
+            .context("failed to parse decrypted payload")
+        {
+            Ok(payload) => payload,
+            Err(error) => {
+                spinner.fail(&format!("Failed to decode {environment}/{logical_key}"));
+                return Err(error);
+            }
+        };
+        spinner.success(&format!(
+            "Delivered {environment}/{logical_key} from GitHub Actions"
+        ));
         Ok(payload.value)
     }
 

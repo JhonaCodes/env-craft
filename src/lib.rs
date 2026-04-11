@@ -7,5 +7,6 @@ pub mod schema;
 pub mod secrets;
 pub mod session;
 pub mod upgrade;
+pub mod ui;
 
 pub use cli::{Cli, run};
