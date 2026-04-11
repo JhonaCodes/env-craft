@@ -145,7 +145,7 @@ fn download_archive(url: &str) -> Result<Vec<u8>> {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_static("envcraft-upgrade/0.1.8"),
+        HeaderValue::from_static("envcraft-upgrade/0.1.9"),
     );
     let client = Client::builder().default_headers(headers).build()?;
 

@@ -61,6 +61,16 @@ This does:
 - starts the GitHub App manifest flow
 - registers one GitHub App for this control plane
 - stores the App ID and PEM locally under `~/.envcraft/github-apps/`
+- defaults to owner installation mode `all`
+
+If you want a selected-repositories installation instead:
+
+```bash
+envcraft github-app setup \
+  --install-mode selected \
+  --install-repo my-org/envcraft-secrets \
+  --install-repo my-org/my-app
+```
 
 To connect more CI repositories to the same app later:
 
@@ -68,10 +78,16 @@ To connect more CI repositories to the same app later:
 envcraft github-app connect --ci-repo my-app
 ```
 
-Then do the one manual GitHub step that cannot be skipped:
+`connect` is the repo-onboarding command. It is meant to:
 
-- open the install URL printed by EnvCraft
-- install the GitHub App on `my-org/envcraft-secrets`
+- attach the repo to the existing GitHub App installation
+- seed `ENVCRAFT_GITHUB_APP_ID` and `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` into that repo
+- fall back to the GitHub installation configure page when GitHub rejects the attach API
+
+There is still one one-time GitHub step that cannot be skipped:
+
+- complete the install or configure page that `setup` opens or prints
+- make sure `my-org/envcraft-secrets` is included
 
 Validate:
 
@@ -224,15 +240,16 @@ If you want the shortest possible proof that EnvCraft works:
 
 1. `envcraft init --github-owner my-org --control-repo envcraft-secrets`
 2. `envcraft github-app setup`
-3. `envcraft github-app connect --ci-repo my-app` when the first CI repo needs the app
-4. `envcraft github-app connect --ci-repo another-app` when another CI repo needs the same app
-5. install the GitHub App on `my-org/envcraft-secrets`
-6. `cd /path/to/my_app`
-7. `envcraft link --project my_app --env dev --env prod`
-8. `envcraft set API_BASE_URL --env prod`
-9. `envcraft reveal API_BASE_URL --env prod`
-10. wire `envcraft pull --env prod --output .env` into GitHub Actions
-11. run one successful build
+3. or `envcraft github-app setup --install-mode selected --install-repo my-org/envcraft-secrets --install-repo my-org/my-app`
+4. complete the one-time install or configure page from `setup` on `my-org/envcraft-secrets`
+5. `envcraft github-app connect --ci-repo my-app` when the first CI repo needs the app
+6. `envcraft github-app connect --ci-repo another-app` when another CI repo needs the same app
+7. `cd /path/to/my_app`
+8. `envcraft link --project my_app --env dev --env prod`
+9. `envcraft set API_BASE_URL --env prod`
+10. `envcraft reveal API_BASE_URL --env prod`
+11. wire `envcraft pull --env prod --output .env` into GitHub Actions
+12. run one successful build
 
 For a remote-server proof:
 
@@ -248,6 +265,7 @@ For a remote-server proof:
 - Using `my-app` as the EnvCraft project slug in `--project`
 - Assuming `init` also finishes CI auth
 - Creating a new GitHub App for every project instead of using `connect` to attach more CI repos
-- Forgetting to install the GitHub App on the control-plane repo after `github-app setup`
+- Forgetting the one-time owner installation on the control-plane repo before the first `connect`
+- Assuming `selected` mode never needs the browser again when adding later repos
 - Using `deploy-inject` in a `Dockerfile`
 - Expecting `pull` to mutate secrets; it only reads through GitHub Actions

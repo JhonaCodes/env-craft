@@ -66,7 +66,9 @@ pub struct Artifact {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Repository {
+    pub id: u64,
     pub name: String,
+    pub full_name: String,
     pub clone_url: String,
     pub default_branch: String,
     pub html_url: String,
@@ -114,11 +116,25 @@ struct GitHubAppCredentials {
 #[derive(Debug, Deserialize)]
 struct InstallationInfo {
     id: u64,
+    #[serde(default)]
+    repository_selection: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct InstallationTokenResponse {
     token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallationRepositoryListResponse {
+    repositories: Vec<Repository>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitHubAppInstallationStatus {
+    pub installation_id: u64,
+    pub repository_selection: Option<String>,
+    pub repositories: Vec<Repository>,
 }
 
 #[derive(Debug, Serialize)]
@@ -339,6 +355,38 @@ impl GitHubClient {
         let payload: RepoSecretsResponse =
             self.get_json(&format!("{API_BASE}/repos/{owner}/{repo}/actions/secrets"))?;
         Ok(payload.secrets)
+    }
+
+    pub fn list_installation_repositories(&self) -> Result<Vec<Repository>> {
+        let mut repositories = Vec::new();
+        let mut page = 1;
+
+        loop {
+            let payload: InstallationRepositoryListResponse = self.get_json(&format!(
+                "{API_BASE}/installation/repositories?per_page=100&page={page}"
+            ))?;
+
+            let page_size = payload.repositories.len();
+            repositories.extend(payload.repositories);
+
+            if page_size < 100 {
+                break;
+            }
+
+            page += 1;
+        }
+
+        Ok(repositories)
+    }
+
+    pub fn add_repository_to_installation(
+        &self,
+        installation_id: u64,
+        repository_id: u64,
+    ) -> Result<()> {
+        let url =
+            format!("{API_BASE}/user/installations/{installation_id}/repositories/{repository_id}");
+        self.put_empty(&url)
     }
 
     pub fn dispatch_delivery(
@@ -596,6 +644,25 @@ impl GitHubClient {
         }
     }
 
+    fn put_empty(&self, url: &str) -> Result<()> {
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.put(url).send()?;
+                if !response.status().is_success() {
+                    return Err(read_error(response));
+                }
+                Ok(())
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("PUT", url, None)?;
+                if !output.status.success() {
+                    return Err(gh_api_error("PUT", url, &output));
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
         match &self.backend {
             GitHubBackend::Http(http) => {
@@ -752,6 +819,14 @@ fn create_installation_token(
     let client = Client::builder().build()?;
     let jwt = create_github_app_jwt(credentials)?;
     let installation_id = resolve_installation_id(&client, &jwt, owner, repo)?;
+    create_installation_token_for_id(&client, &jwt, installation_id)
+}
+
+fn create_installation_token_for_id(
+    client: &Client,
+    jwt: &str,
+    installation_id: u64,
+) -> Result<String> {
     let url = format!("{API_BASE}/app/installations/{installation_id}/access_tokens");
 
     let response = client
@@ -776,6 +851,46 @@ fn create_installation_token(
     Ok(payload.token)
 }
 
+pub fn owner_installation_status(
+    config: &AppConfig,
+) -> Result<Option<GitHubAppInstallationStatus>> {
+    let Some(credentials) = load_github_app_credentials(config)? else {
+        return Ok(None);
+    };
+
+    let client = Client::builder().build()?;
+    let jwt = create_github_app_jwt(&credentials)?;
+    let Some(installation) = resolve_owner_installation(&client, &jwt, &config.github_owner)?
+    else {
+        return Ok(None);
+    };
+
+    let token = create_installation_token_for_id(&client, &jwt, installation.id)?;
+    let installation_client = GitHubClient::new(&token)?;
+    let repositories = installation_client.list_installation_repositories()?;
+
+    Ok(Some(GitHubAppInstallationStatus {
+        installation_id: installation.id,
+        repository_selection: installation.repository_selection,
+        repositories,
+    }))
+}
+
+pub fn repo_is_attached_to_owner_installation(
+    config: &AppConfig,
+    owner: &str,
+    repo: &str,
+) -> Result<bool> {
+    let Some(credentials) = load_github_app_credentials(config)? else {
+        return Ok(false);
+    };
+
+    let client = Client::builder().build()?;
+    let jwt = create_github_app_jwt(&credentials)?;
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/installation");
+    Ok(get_installation(&client, &jwt, &url)?.is_some())
+}
+
 fn resolve_installation_id(
     client: &Client,
     jwt: &str,
@@ -789,15 +904,8 @@ fn resolve_installation_id(
         }
     }
 
-    let owner_urls = [
-        format!("{API_BASE}/users/{owner}/installation"),
-        format!("{API_BASE}/orgs/{owner}/installation"),
-    ];
-
-    for url in owner_urls {
-        if let Some(installation) = get_installation(client, jwt, &url)? {
-            return Ok(installation.id);
-        }
+    if let Some(installation) = resolve_owner_installation(client, jwt, owner)? {
+        return Ok(installation.id);
     }
 
     bail!(
@@ -805,6 +913,25 @@ fn resolve_installation_id(
         repo.map(|repo| format!(" and repo `{repo}`"))
             .unwrap_or_default()
     )
+}
+
+fn resolve_owner_installation(
+    client: &Client,
+    jwt: &str,
+    owner: &str,
+) -> Result<Option<InstallationInfo>> {
+    let owner_urls = [
+        format!("{API_BASE}/users/{owner}/installation"),
+        format!("{API_BASE}/orgs/{owner}/installation"),
+    ];
+
+    for url in owner_urls {
+        if let Some(installation) = get_installation(client, jwt, &url)? {
+            return Ok(Some(installation));
+        }
+    }
+
+    Ok(None)
 }
 
 fn get_installation(client: &Client, jwt: &str, url: &str) -> Result<Option<InstallationInfo>> {

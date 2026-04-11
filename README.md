@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.8 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.9 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.8
+envcraft upgrade --version v0.1.9
 ```
 
 If `envcraft` is not found after installation:
@@ -116,7 +116,8 @@ envcraft init \
   --bootstrap-dir /path/to/envcraft-secrets
 
 envcraft github-app setup
-envcraft github-app connect --ci-repo another-app
+envcraft github-app setup --install-mode selected --install-repo my-org/envcraft-secrets --install-repo my-org/my-app
+envcraft github-app connect --ci-repo my-org/another-app
 
 envcraft link --project my_app --env dev --env prod
 
@@ -188,13 +189,31 @@ To finish the CI auth path after `init`, run:
 envcraft github-app setup
 ```
 
-That command creates the GitHub App once and stores the App ID and PEM locally.
+That command creates the GitHub App once, stores the App ID and PEM locally, and drives the owner installation flow.
 
-To attach more CI repositories to the same app later, run:
+By default, `setup` assumes `--install-mode all`.
+
+If you want a selected-repositories installation instead:
 
 ```bash
-envcraft github-app connect --ci-repo another-app
+envcraft github-app setup \
+  --install-mode selected \
+  --install-repo my-org/envcraft-secrets \
+  --install-repo my-org/my-app
 ```
+
+If this is the first time, `setup` may still print or open the one-time install URL. Complete that owner-level install on the control-plane repository first.
+
+To connect CI repositories to the same app after that, run:
+
+```bash
+envcraft github-app connect --ci-repo my-org/another-app
+```
+
+`connect` now does both:
+- adds the CI repo to the existing GitHub App installation when GitHub allows it
+- if GitHub blocks the attach API, opens the installation configure page and waits for the repo to appear
+- seeds `ENVCRAFT_GITHUB_APP_ID` and `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` into that CI repo
 
 ### 2. Link an application repository
 
@@ -253,7 +272,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.8 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.9 bash
 ```
 
 Supported release assets:
@@ -261,7 +280,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.8`.
+To publish a release, push a semantic version tag such as `v0.1.9`.
 
 ## Control-plane bootstrap
 

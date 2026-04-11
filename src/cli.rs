@@ -14,7 +14,9 @@ use crate::{
     config::AppConfig,
     fs_sec,
     github::GitHubClient,
-    github_app::{connect_github_app, load_stored_metadata, setup_github_app},
+    github_app::{
+        GitHubAppInstallMode, connect_github_app, github_app_status_report, setup_github_app,
+    },
     schema::ProjectSchema,
     secrets::{StackPreset, generate_from_presets, generate_secret_like},
     session::{DeliverySession, purge_expired_sessions},
@@ -86,16 +88,16 @@ ENVCRAFT_GITHUB_TOKEN is a legacy fallback."
 #[derive(Debug, Subcommand)]
 enum GitHubAppCommand {
     #[command(
-        about = "Create or reuse the EnvCraft GitHub App for this control plane",
-        after_help = "Examples:\n  envcraft github-app setup\n  envcraft github-app setup --no-open"
+        about = "Create or reuse the EnvCraft GitHub App and drive the owner installation flow",
+        after_help = "Examples:\n  envcraft github-app setup\n  envcraft github-app setup --install-mode selected --install-repo my-org/envcraft-secrets --install-repo my-org/my-app\n  envcraft github-app setup --no-open"
     )]
     Setup(GitHubAppSetupArgs),
     #[command(
-        about = "Connect additional CI repositories to the existing EnvCraft GitHub App",
+        about = "Attach CI repositories to the existing EnvCraft GitHub App installation and seed their CI secrets",
         after_help = "Examples:\n  envcraft github-app connect --ci-repo my-app\n  envcraft github-app connect --ci-repo my-org/my-app --ci-repo another-repo"
     )]
     Connect(GitHubAppConnectArgs),
-    #[command(about = "Show the locally stored GitHub App status and CI secret names")]
+    #[command(about = "Show stored GitHub App metadata plus live installation status")]
     Status,
 }
 
@@ -191,8 +193,20 @@ struct ListArgs {
 struct GitHubAppSetupArgs {
     #[arg(
         long,
+        value_enum,
+        default_value_t = GitHubAppInstallMode::All,
+        help = "Desired owner installation mode for the EnvCraft GitHub App"
+    )]
+    install_mode: GitHubAppInstallMode,
+    #[arg(
+        long = "install-repo",
+        help = "Repository to require in selected mode. Accepts repo or owner/repo. The control-plane repo is always included automatically."
+    )]
+    install_repos: Vec<String>,
+    #[arg(
+        long,
         default_value_t = false,
-        help = "Do not try to open the GitHub App registration page automatically"
+        help = "Do not try to open the GitHub App registration or installation pages automatically"
     )]
     no_open: bool,
 }
@@ -208,7 +222,7 @@ struct GitHubAppConnectArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.8")]
+#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.9")]
 struct UpgradeArgs {
     #[arg(long)]
     version: Option<String>,
@@ -524,7 +538,12 @@ fn list(args: ListArgs) -> Result<()> {
 
 fn github_app_setup(args: GitHubAppSetupArgs) -> Result<()> {
     let config = AppConfig::load()?;
-    let result = setup_github_app(&config, !args.no_open)?;
+    let result = setup_github_app(
+        &config,
+        args.install_mode,
+        &args.install_repos,
+        !args.no_open,
+    )?;
     if result.created {
         println!("Registered GitHub App {} ({})", result.slug, result.app_id);
         if let Some(path) = result.launcher_path {
@@ -537,14 +556,53 @@ fn github_app_setup(args: GitHubAppSetupArgs) -> Result<()> {
         );
     }
     println!("Install URL: {}", result.install_url);
+    println!("Browser target: {}", result.browser_target_url);
     println!(
-        "Next step: use `envcraft github-app connect --ci-repo <repo>` to seed {} and {} into each CI repository that runs EnvCraft.",
-        config.github_app_id_env_var, config.github_app_private_key_env_var
+        "Desired install mode: {}",
+        match result.install_mode {
+            GitHubAppInstallMode::All => "all",
+            GitHubAppInstallMode::Selected => "selected",
+        }
     );
-    println!(
-        "Install the app on {} so EnvCraft can mint installation tokens for the control plane.",
-        config.control_repo_slug()
-    );
+    if result.requested_install_repos.is_empty() {
+        println!("Requested install repos: none");
+    } else {
+        println!(
+            "Requested install repos: {}",
+            result.requested_install_repos.join(", ")
+        );
+    }
+    if result.control_plane_installed {
+        println!(
+            "Control-plane installation is ready on {}.",
+            config.control_repo_slug()
+        );
+        println!(
+            "Next step: use `envcraft github-app connect --ci-repo <repo>` to add CI repositories to the app installation and seed {} / {}.",
+            config.github_app_id_env_var, config.github_app_private_key_env_var
+        );
+    } else {
+        println!(
+            "One-time install required: open the Install URL and install the app on {} before connecting CI repositories.",
+            config.control_repo_slug()
+        );
+    }
+    match result.owner_installation {
+        Some(installation) => {
+            println!(
+                "Owner installation: present ({})",
+                installation.installation_id
+            );
+            println!(
+                "Repository selection: {}",
+                installation
+                    .repository_selection
+                    .as_deref()
+                    .unwrap_or("unknown")
+            );
+        }
+        None => println!("Owner installation: missing"),
+    }
     Ok(())
 }
 
@@ -556,6 +614,22 @@ fn github_app_connect(args: GitHubAppConnectArgs) -> Result<()> {
         result.slug, result.app_id
     );
     println!("Install URL: {}", result.install_url);
+    if result.attached_ci_repos.is_empty() {
+        println!("Attached to installation: none");
+    } else {
+        println!(
+            "Attached to installation: {}",
+            result.attached_ci_repos.join(", ")
+        );
+    }
+    if result.already_attached_ci_repos.is_empty() {
+        println!("Already attached: none");
+    } else {
+        println!(
+            "Already attached: {}",
+            result.already_attached_ci_repos.join(", ")
+        );
+    }
     println!(
         "Seeded {} and {} in: {}",
         config.github_app_id_env_var,
@@ -567,17 +641,36 @@ fn github_app_connect(args: GitHubAppConnectArgs) -> Result<()> {
 
 fn github_app_status() -> Result<()> {
     let config = AppConfig::load()?;
+    let report = github_app_status_report(&config)?;
+    let metadata = report.metadata;
+    let owner_installation = report.owner_installation;
+    let control_plane_installed = report.control_plane_installed;
     println!("control-plane repo: {}", config.control_repo_slug());
     println!(
         "CI secret names: {}, {}",
         config.github_app_id_env_var, config.github_app_private_key_env_var
     );
 
-    match load_stored_metadata(&config)? {
+    match metadata {
         Some(metadata) => {
             println!("stored app id: {}", metadata.app_id);
             println!("stored slug: {}", metadata.slug);
             println!("install url: {}", metadata.install_url);
+            println!(
+                "stored install mode: {}",
+                match metadata.install_mode {
+                    GitHubAppInstallMode::All => "all",
+                    GitHubAppInstallMode::Selected => "selected",
+                }
+            );
+            if metadata.requested_install_repos.is_empty() {
+                println!("requested install repos: none");
+            } else {
+                println!(
+                    "requested install repos: {}",
+                    metadata.requested_install_repos.join(", ")
+                );
+            }
             println!(
                 "stored private key: {}",
                 config.github_app_private_key_path()?.display()
@@ -591,6 +684,41 @@ fn github_app_status() -> Result<()> {
         None => {
             println!("stored app id: not configured");
             println!("run `envcraft github-app setup` to create and store the GitHub App locally");
+        }
+    }
+
+    match owner_installation {
+        Some(installation) => {
+            println!(
+                "owner installation: present ({})",
+                installation.installation_id
+            );
+            println!(
+                "repository selection: {}",
+                installation
+                    .repository_selection
+                    .as_deref()
+                    .unwrap_or("unknown")
+            );
+            println!(
+                "control-plane attached: {}",
+                if control_plane_installed { "yes" } else { "no" }
+            );
+            if installation.repositories.is_empty() {
+                println!("installed repos: none");
+            } else {
+                let mut installed = installation
+                    .repositories
+                    .into_iter()
+                    .map(|repo| repo.full_name)
+                    .collect::<Vec<_>>();
+                installed.sort();
+                println!("installed repos: {}", installed.join(", "));
+            }
+        }
+        None => {
+            println!("owner installation: missing");
+            println!("control-plane attached: no");
         }
     }
 

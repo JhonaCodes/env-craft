@@ -17,13 +17,43 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{config::AppConfig, fs_sec, github::GitHubClient};
+use crate::{
+    config::AppConfig,
+    fs_sec,
+    github::{
+        GitHubAppInstallationStatus, GitHubClient, owner_installation_status,
+        repo_is_attached_to_owner_installation,
+    },
+};
 
 const GITHUB_WEB_BASE: &str = "https://github.com";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const ACCEPT_HEADER: &str = "application/vnd.github+json";
 const API_VERSION: &str = "2022-11-28";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(900);
+const INSTALLATION_WAIT_TIMEOUT: Duration = Duration::from_secs(900);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum GitHubAppInstallMode {
+    All,
+    Selected,
+}
+
+impl Default for GitHubAppInstallMode {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+impl GitHubAppInstallMode {
+    fn as_github_selection(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Selected => "selected",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredGitHubAppMetadata {
@@ -33,6 +63,10 @@ pub struct StoredGitHubAppMetadata {
     pub html_url: Option<String>,
     pub created_at: DateTime<Utc>,
     #[serde(default)]
+    pub install_mode: GitHubAppInstallMode,
+    #[serde(default)]
+    pub requested_install_repos: Vec<String>,
+    #[serde(default)]
     pub ci_repos: Vec<String>,
 }
 
@@ -41,9 +75,14 @@ pub struct GitHubAppSetupResult {
     pub app_id: String,
     pub slug: String,
     pub install_url: String,
+    pub browser_target_url: String,
     pub launcher_path: Option<PathBuf>,
     pub seeded_ci_repos: Vec<String>,
     pub created: bool,
+    pub install_mode: GitHubAppInstallMode,
+    pub requested_install_repos: Vec<String>,
+    pub control_plane_installed: bool,
+    pub owner_installation: Option<GitHubAppInstallationStatus>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +91,15 @@ pub struct GitHubAppConnectResult {
     pub slug: String,
     pub install_url: String,
     pub seeded_ci_repos: Vec<String>,
+    pub attached_ci_repos: Vec<String>,
+    pub already_attached_ci_repos: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitHubAppStatusReport {
+    pub metadata: Option<StoredGitHubAppMetadata>,
+    pub owner_installation: Option<GitHubAppInstallationStatus>,
+    pub control_plane_installed: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,19 +121,63 @@ struct GitHubAppManifest {
     default_permissions: BTreeMap<String, String>,
 }
 
-pub fn setup_github_app(config: &AppConfig, open_browser: bool) -> Result<GitHubAppSetupResult> {
+pub fn setup_github_app(
+    config: &AppConfig,
+    install_mode: GitHubAppInstallMode,
+    requested_install_repos: &[String],
+    open_browser: bool,
+) -> Result<GitHubAppSetupResult> {
     config.ensure_local_dirs()?;
+    let github = GitHubClient::from_token_source(&config.token_env_var)?;
+    let requested_install_repos =
+        resolve_requested_install_repos(config, &github, install_mode, requested_install_repos)?;
 
     if let Some(metadata) = load_stored_metadata(config)? {
-        let github = GitHubClient::from_token_source(&config.token_env_var)?;
         if github.get_app_by_slug(&metadata.slug)?.is_some() {
+            let refreshed_metadata = StoredGitHubAppMetadata {
+                install_mode,
+                requested_install_repos: requested_install_repos.clone(),
+                ..metadata
+            };
+            let private_key_path = config.github_app_private_key_path()?;
+            let private_key_pem = fs::read_to_string(&private_key_path).with_context(|| {
+                format!(
+                    "failed to read stored GitHub App private key at {}",
+                    private_key_path.display()
+                )
+            })?;
+            persist_github_app(config, &refreshed_metadata, &private_key_pem)?;
+            let browser_target_url = browser_target_url(config, install_mode, &refreshed_metadata)?;
+            if open_browser {
+                let _ = open_path_in_browser(&PathBuf::from(&browser_target_url));
+            }
+            let owner_installation = if open_browser {
+                wait_for_desired_installation_state(
+                    config,
+                    install_mode,
+                    &requested_install_repos,
+                    INSTALLATION_WAIT_TIMEOUT,
+                )?
+            } else {
+                owner_installation_status(config)?
+            };
+            let control_plane_installed = repo_is_attached_to_owner_installation(
+                config,
+                &config.github_owner,
+                &config.control_repo,
+            )?;
             return Ok(GitHubAppSetupResult {
-                app_id: metadata.app_id,
-                slug: metadata.slug,
-                install_url: metadata.install_url,
+                app_id: refreshed_metadata.app_id,
+                slug: refreshed_metadata.slug,
+                install_url: refreshed_metadata.install_url,
+                browser_target_url,
                 launcher_path: None,
                 seeded_ci_repos: Vec::new(),
                 created: false,
+                install_mode,
+                requested_install_repos,
+                control_plane_installed,
+                owner_installation,
             });
         }
 
@@ -112,16 +204,39 @@ pub fn setup_github_app(config: &AppConfig, open_browser: bool) -> Result<GitHub
         install_url: install_url.clone(),
         html_url: response.html_url.clone(),
         created_at: Utc::now(),
+        install_mode,
+        requested_install_repos: requested_install_repos.clone(),
         ci_repos: Vec::new(),
     };
     persist_github_app(config, &metadata, &response.pem)?;
+    let browser_target_url = browser_target_url(config, install_mode, &metadata)?;
+    if open_browser {
+        let _ = open_path_in_browser(&PathBuf::from(&browser_target_url));
+    }
+    let owner_installation = if open_browser {
+        wait_for_desired_installation_state(
+            config,
+            install_mode,
+            &requested_install_repos,
+            INSTALLATION_WAIT_TIMEOUT,
+        )?
+    } else {
+        owner_installation_status(config)?
+    };
+    let control_plane_installed =
+        repo_is_attached_to_owner_installation(config, &config.github_owner, &config.control_repo)?;
     Ok(GitHubAppSetupResult {
         app_id: response.id.to_string(),
         slug: response.slug,
         install_url,
+        browser_target_url,
         launcher_path: Some(launcher_path),
         seeded_ci_repos: Vec::new(),
         created: true,
+        install_mode,
+        requested_install_repos,
+        control_plane_installed,
+        owner_installation,
     })
 }
 
@@ -136,13 +251,155 @@ pub fn connect_github_app(
         )
     })?;
 
-    let seeded_ci_repos = connect_ci_repos(config, &mut metadata, ci_repos)?;
+    let (seeded_ci_repos, attached_ci_repos, already_attached_ci_repos) =
+        connect_ci_repos(config, &mut metadata, ci_repos)?;
     Ok(GitHubAppConnectResult {
         app_id: metadata.app_id,
         slug: metadata.slug,
         install_url: metadata.install_url,
         seeded_ci_repos,
+        attached_ci_repos,
+        already_attached_ci_repos,
     })
+}
+
+pub fn github_app_status_report(config: &AppConfig) -> Result<GitHubAppStatusReport> {
+    let metadata = load_stored_metadata(config)?;
+    let owner_installation = owner_installation_status(config)?;
+    let control_plane_installed =
+        repo_is_attached_to_owner_installation(config, &config.github_owner, &config.control_repo)?;
+
+    Ok(GitHubAppStatusReport {
+        metadata,
+        owner_installation,
+        control_plane_installed,
+    })
+}
+
+fn resolve_requested_install_repos(
+    config: &AppConfig,
+    github: &GitHubClient,
+    install_mode: GitHubAppInstallMode,
+    requested_install_repos: &[String],
+) -> Result<Vec<String>> {
+    if install_mode == GitHubAppInstallMode::All {
+        return Ok(Vec::new());
+    }
+
+    let mut repos = requested_install_repos
+        .iter()
+        .map(|repo| resolve_ci_repo_target(config, github, repo))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|repo| repo.slug)
+        .collect::<Vec<_>>();
+
+    let control_plane_slug = config.control_repo_slug();
+    if !repos
+        .iter()
+        .any(|repo| repo.eq_ignore_ascii_case(&control_plane_slug))
+    {
+        repos.push(control_plane_slug);
+    }
+
+    repos.sort();
+    repos.dedup();
+    Ok(repos)
+}
+
+fn browser_target_url(
+    config: &AppConfig,
+    install_mode: GitHubAppInstallMode,
+    metadata: &StoredGitHubAppMetadata,
+) -> Result<String> {
+    let owner_installation = owner_installation_status(config)?;
+    match owner_installation {
+        Some(installation) => installation_config_url(config, installation.installation_id),
+        None => Ok(match install_mode {
+            GitHubAppInstallMode::All | GitHubAppInstallMode::Selected => {
+                metadata.install_url.clone()
+            }
+        }),
+    }
+}
+
+fn installation_config_url(config: &AppConfig, installation_id: u64) -> Result<String> {
+    let github = GitHubClient::from_token_source(&config.token_env_var)?;
+    let current_user = github.current_user()?;
+    if current_user
+        .login
+        .eq_ignore_ascii_case(&config.github_owner)
+    {
+        return Ok(format!(
+            "{GITHUB_WEB_BASE}/settings/installations/{installation_id}"
+        ));
+    }
+
+    Ok(format!(
+        "{GITHUB_WEB_BASE}/organizations/{}/settings/installations/{installation_id}",
+        config.github_owner
+    ))
+}
+
+fn wait_for_desired_installation_state(
+    config: &AppConfig,
+    install_mode: GitHubAppInstallMode,
+    requested_install_repos: &[String],
+    timeout: Duration,
+) -> Result<Option<GitHubAppInstallationStatus>> {
+    let started = Instant::now();
+    loop {
+        let status = owner_installation_status(config)?;
+        if installation_matches_expectation(
+            config,
+            install_mode,
+            requested_install_repos,
+            status.as_ref(),
+        )? {
+            return Ok(status);
+        }
+
+        if started.elapsed() > timeout {
+            return Ok(status);
+        }
+
+        thread::sleep(Duration::from_secs(2));
+    }
+}
+
+fn installation_matches_expectation(
+    config: &AppConfig,
+    install_mode: GitHubAppInstallMode,
+    requested_install_repos: &[String],
+    status: Option<&GitHubAppInstallationStatus>,
+) -> Result<bool> {
+    let Some(status) = status else {
+        return Ok(false);
+    };
+
+    if !repo_is_listed(&status.repositories, &config.control_repo_slug()) {
+        return Ok(false);
+    }
+
+    if status.repository_selection.as_deref() != Some(install_mode.as_github_selection()) {
+        return Ok(false);
+    }
+
+    if install_mode == GitHubAppInstallMode::Selected {
+        for repo in requested_install_repos {
+            if !repo_is_listed(&status.repositories, repo) {
+                return Ok(false);
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+fn repo_is_listed(repositories: &[crate::github::Repository], slug: &str) -> bool {
+    repositories
+        .iter()
+        .any(|repo| repo.full_name.eq_ignore_ascii_case(slug))
 }
 
 pub fn load_stored_metadata(config: &AppConfig) -> Result<Option<StoredGitHubAppMetadata>> {
@@ -281,7 +538,7 @@ fn connect_ci_repos(
     config: &AppConfig,
     metadata: &mut StoredGitHubAppMetadata,
     ci_repos: &[String],
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let private_key_path = config.github_app_private_key_path()?;
     let private_key_pem = fs::read_to_string(&private_key_path).with_context(|| {
         format!(
@@ -290,10 +547,96 @@ fn connect_ci_repos(
         )
     })?;
 
-    let seeded_ci_repos =
-        seed_ci_repo_secrets(config, ci_repos, &metadata.app_id, &private_key_pem)?;
+    let github = GitHubClient::from_token_source(&config.token_env_var)?;
+    let owner_installation = owner_installation_status(config)?.ok_or_else(|| {
+        anyhow!(
+            "GitHub App {} exists locally but is not installed on the owner yet. Open {} and install it on {} before connecting CI repositories.",
+            metadata.slug,
+            metadata.install_url,
+            config.control_repo_slug()
+        )
+    })?;
+    if !repo_is_attached_to_owner_installation(config, &config.github_owner, &config.control_repo)?
+    {
+        bail!(
+            "GitHub App {} is not attached to the control-plane repository {} yet. Open {} and make sure that repository is selected before connecting CI repositories.",
+            metadata.slug,
+            config.control_repo_slug(),
+            metadata.install_url
+        );
+    }
+
+    let mut resolved_repos = Vec::new();
+    let mut attached_ci_repos = Vec::new();
+    let mut already_attached_ci_repos = Vec::new();
+
+    for repo in ci_repos {
+        let resolved = resolve_ci_repo_target(config, &github, repo)?;
+        if repo_is_attached_to_owner_installation(config, &resolved.owner, &resolved.repo_name)? {
+            already_attached_ci_repos.push(resolved.slug.clone());
+        } else {
+            let attach_result = github.add_repository_to_installation(
+                owner_installation.installation_id,
+                resolved.repo_id,
+            );
+
+            if let Err(error) = attach_result {
+                let configure_url =
+                    installation_config_url(config, owner_installation.installation_id)?;
+                let _ = open_path_in_browser(&PathBuf::from(&configure_url));
+                wait_for_repo_attachment(
+                    config,
+                    &resolved.slug,
+                    owner_installation.installation_id,
+                    INSTALLATION_WAIT_TIMEOUT,
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to add repository `{}` to GitHub App installation {} automatically. GitHub likely rejected the attach API for the current auth. Open {} and add the repository, or re-authenticate with `gh auth login` using a classic PAT that has `repo`. Original error: {}",
+                        resolved.slug, owner_installation.installation_id, configure_url, error
+                    )
+                })?;
+            } else if !repo_is_attached_to_owner_installation(
+                config,
+                &resolved.owner,
+                &resolved.repo_name,
+            )? {
+                let configure_url =
+                    installation_config_url(config, owner_installation.installation_id)?;
+                let _ = open_path_in_browser(&PathBuf::from(&configure_url));
+                wait_for_repo_attachment(
+                    config,
+                    &resolved.slug,
+                    owner_installation.installation_id,
+                    INSTALLATION_WAIT_TIMEOUT,
+                )
+                .with_context(|| {
+                    format!(
+                        "GitHub accepted the attach request, but `{}` is still not attached to the EnvCraft GitHub App installation. Open {} and confirm the repository is selected.",
+                        resolved.slug, configure_url
+                    )
+                })?;
+            }
+
+            attached_ci_repos.push(resolved.slug.clone());
+        }
+
+        resolved_repos.push(resolved);
+    }
+
+    let seeded_ci_repos = seed_ci_repo_secrets(
+        config,
+        &github,
+        &resolved_repos,
+        &metadata.app_id,
+        &private_key_pem,
+    )?;
     if seeded_ci_repos.is_empty() {
-        return Ok(seeded_ci_repos);
+        return Ok((
+            seeded_ci_repos,
+            attached_ci_repos,
+            already_attached_ci_repos,
+        ));
     }
 
     for repo in &seeded_ci_repos {
@@ -304,12 +647,53 @@ fn connect_ci_repos(
     metadata.ci_repos.sort();
     metadata.ci_repos.dedup();
     persist_github_app(config, metadata, &private_key_pem)?;
-    Ok(seeded_ci_repos)
+    Ok((
+        seeded_ci_repos,
+        attached_ci_repos,
+        already_attached_ci_repos,
+    ))
+}
+
+fn wait_for_repo_attachment(
+    config: &AppConfig,
+    repo_slug: &str,
+    installation_id: u64,
+    timeout: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = owner_installation_status(config)? {
+            if status.installation_id == installation_id
+                && repo_is_listed(&status.repositories, repo_slug)
+            {
+                return Ok(());
+            }
+        }
+
+        if started.elapsed() > timeout {
+            bail!(
+                "timed out waiting for repository `{}` to appear in installation {}",
+                repo_slug,
+                installation_id
+            );
+        }
+
+        thread::sleep(Duration::from_secs(2));
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedCiRepo {
+    owner: String,
+    repo_name: String,
+    slug: String,
+    repo_id: u64,
 }
 
 fn seed_ci_repo_secrets(
     config: &AppConfig,
-    ci_repos: &[String],
+    github: &GitHubClient,
+    ci_repos: &[ResolvedCiRepo],
     app_id: &str,
     private_key_pem: &str,
 ) -> Result<Vec<String>> {
@@ -317,19 +701,22 @@ fn seed_ci_repo_secrets(
         return Ok(Vec::new());
     }
 
-    let github = GitHubClient::from_token_source(&config.token_env_var)?;
     let mut seeded = Vec::new();
 
     for repo in ci_repos {
-        let (owner, repo_name) = resolve_ci_repo_target(config, &github, repo)?;
-        github.put_repo_secret(&owner, &repo_name, &config.github_app_id_env_var, app_id)?;
         github.put_repo_secret(
-            &owner,
-            &repo_name,
+            &repo.owner,
+            &repo.repo_name,
+            &config.github_app_id_env_var,
+            app_id,
+        )?;
+        github.put_repo_secret(
+            &repo.owner,
+            &repo.repo_name,
             &config.github_app_private_key_env_var,
             private_key_pem,
         )?;
-        seeded.push(format!("{owner}/{repo_name}"));
+        seeded.push(repo.slug.clone());
     }
 
     Ok(seeded)
@@ -339,15 +726,20 @@ fn resolve_ci_repo_target(
     config: &AppConfig,
     github: &GitHubClient,
     input: &str,
-) -> Result<(String, String)> {
+) -> Result<ResolvedCiRepo> {
     let trimmed = input.trim();
     let (owner, repo) = match trimmed.split_once('/') {
         Some((owner, repo)) => (owner.trim().to_string(), repo.trim().to_string()),
         None => (config.github_owner.clone(), trimmed.to_string()),
     };
 
-    if github.get_repo(&owner, &repo)?.is_some() {
-        return Ok((owner, repo));
+    if let Some(repository) = github.get_repo(&owner, &repo)? {
+        return Ok(ResolvedCiRepo {
+            owner,
+            repo_name: repo,
+            slug: repository.full_name,
+            repo_id: repository.id,
+        });
     }
 
     if !trimmed.contains('/') && repo.contains('_') {
@@ -579,8 +971,8 @@ mod tests {
     use crate::config::AppConfig;
 
     use super::{
-        StoredGitHubAppMetadata, build_manifest, html_attr_escape, load_stored_metadata,
-        parse_query, percent_decode,
+        GitHubAppInstallMode, StoredGitHubAppMetadata, build_manifest, html_attr_escape,
+        load_stored_metadata, parse_query, percent_decode,
     };
 
     #[test]
@@ -649,6 +1041,8 @@ mod tests {
             install_url: "https://github.com/apps/envcraft/installations/new".to_string(),
             html_url: None,
             created_at: chrono::Utc::now(),
+            install_mode: GitHubAppInstallMode::All,
+            requested_install_repos: Vec::new(),
             ci_repos: vec!["JhonaCodes/my-app".to_string()],
         };
         std::fs::write(&metadata_path, toml::to_string_pretty(&metadata).unwrap()).unwrap();
