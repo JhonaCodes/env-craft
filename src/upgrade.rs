@@ -8,11 +8,13 @@ use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
+use sha2::{Digest, Sha256};
 use tar::Archive;
 
 const OWNER: &str = "JhonaCodes";
 const REPO: &str = "env-craft";
 const BIN_NAME: &str = "envcraft";
+const CHECKSUMS_FILE: &str = "SHA256SUMS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpgradeTarget {
@@ -55,6 +57,21 @@ pub fn upgrade_binary(version: Option<&str>) -> Result<PathBuf> {
 
     let url = release_download_url(version, &target);
     let bytes = download_archive(&url)?;
+
+    let checksums_url = checksums_download_url(version);
+    match download_archive(&checksums_url) {
+        Ok(checksums_bytes) => {
+            let checksums_text = String::from_utf8(checksums_bytes)
+                .context("SHA256SUMS file is not valid UTF-8")?;
+            verify_checksum(&checksums_text, &target.asset_name(), &bytes)?;
+        }
+        Err(_) => {
+            eprintln!(
+                "warning: SHA256SUMS not available for this release, skipping integrity check"
+            );
+        }
+    }
+
     write_extracted_binary(&bytes, &temp_output)?;
     finalize_upgrade(&temp_output, &current_exe)?;
 
@@ -69,6 +86,59 @@ pub fn release_download_url(version: Option<&str>, target: &UpgradeTarget) -> St
         }
         None => format!("https://github.com/{OWNER}/{REPO}/releases/latest/download/{asset}"),
     }
+}
+
+pub fn checksums_download_url(version: Option<&str>) -> String {
+    match version {
+        Some(version) => {
+            format!(
+                "https://github.com/{OWNER}/{REPO}/releases/download/{version}/{CHECKSUMS_FILE}"
+            )
+        }
+        None => {
+            format!("https://github.com/{OWNER}/{REPO}/releases/latest/download/{CHECKSUMS_FILE}")
+        }
+    }
+}
+
+/// Verify that the SHA-256 digest of `archive_bytes` matches the expected hash
+/// listed in the `checksums_text` for the given `asset_name`.
+pub fn verify_checksum(checksums_text: &str, asset_name: &str, archive_bytes: &[u8]) -> Result<()> {
+    let expected = parse_checksum_for_asset(checksums_text, asset_name)?;
+    let actual = sha256_hex(archive_bytes);
+    if actual != expected {
+        bail!(
+            "checksum mismatch for {asset_name}: expected {expected}, got {actual}. \
+             The downloaded archive may have been tampered with."
+        );
+    }
+    Ok(())
+}
+
+/// Parse a SHA256SUMS file and return the hex digest for `asset_name`.
+/// Expected format per line: `<hex_hash>  <filename>` (two spaces, standard sha256sum output).
+pub fn parse_checksum_for_asset(checksums_text: &str, asset_name: &str) -> Result<String> {
+    for line in checksums_text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Standard sha256sum format: "<hash>  <filename>" (two-space separator)
+        // Also accept single space for flexibility.
+        if let Some((hash, name)) = line.split_once(char::is_whitespace) {
+            let name = name.trim();
+            if name == asset_name {
+                return Ok(hash.to_lowercase());
+            }
+        }
+    }
+    bail!("no checksum found for {asset_name} in SHA256SUMS")
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
 }
 
 fn download_archive(url: &str) -> Result<Vec<u8>> {
@@ -132,10 +202,8 @@ fn write_extracted_binary(archive_bytes: &[u8], output_path: &Path) -> Result<()
 }
 
 fn finalize_upgrade(temp_output: &Path, current_exe: &Path) -> Result<()> {
-    if current_exe.exists() {
-        fs::remove_file(current_exe)
-            .with_context(|| format!("failed to replace {}", current_exe.display()))?;
-    }
+    // rename(2) on POSIX is atomic and replaces the destination in a single
+    // kernel operation, avoiding the TOCTOU window that remove+rename creates.
     fs::rename(temp_output, current_exe).with_context(|| {
         format!(
             "failed to move upgraded binary into {}",
@@ -147,7 +215,10 @@ fn finalize_upgrade(temp_output: &Path, current_exe: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{UpgradeTarget, release_download_url};
+    use super::{
+        UpgradeTarget, checksums_download_url, parse_checksum_for_asset, release_download_url,
+        sha256_hex, verify_checksum,
+    };
 
     #[test]
     fn builds_latest_download_url() {
@@ -173,5 +244,68 @@ mod tests {
             release_download_url(Some("v0.1.1"), &target),
             "https://github.com/JhonaCodes/env-craft/releases/download/v0.1.1/envcraft-linux-x86_64.tar.gz"
         );
+    }
+
+    #[test]
+    fn builds_checksums_url_latest() {
+        assert_eq!(
+            checksums_download_url(None),
+            "https://github.com/JhonaCodes/env-craft/releases/latest/download/SHA256SUMS"
+        );
+    }
+
+    #[test]
+    fn builds_checksums_url_versioned() {
+        assert_eq!(
+            checksums_download_url(Some("v0.2.0")),
+            "https://github.com/JhonaCodes/env-craft/releases/download/v0.2.0/SHA256SUMS"
+        );
+    }
+
+    #[test]
+    fn parses_checksum_from_sha256sums_file() {
+        let checksums = "\
+abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890  envcraft-macos-aarch64.tar.gz
+1111111111111111111111111111111111111111111111111111111111111111  envcraft-linux-x86_64.tar.gz
+";
+        let hash = parse_checksum_for_asset(checksums, "envcraft-linux-x86_64.tar.gz").unwrap();
+        assert_eq!(
+            hash,
+            "1111111111111111111111111111111111111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn parse_checksum_returns_error_for_missing_asset() {
+        let checksums = "abcd1234  other-file.tar.gz\n";
+        let result = parse_checksum_for_asset(checksums, "envcraft-macos-aarch64.tar.gz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sha256_hex_produces_correct_digest() {
+        // SHA-256 of empty input is a well-known constant
+        let hash = sha256_hex(b"");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn verify_checksum_passes_on_match() {
+        let data = b"hello world";
+        let hash = sha256_hex(data);
+        let checksums = format!("{hash}  my-archive.tar.gz\n");
+        verify_checksum(&checksums, "my-archive.tar.gz", data).unwrap();
+    }
+
+    #[test]
+    fn verify_checksum_fails_on_mismatch() {
+        let checksums = "0000000000000000000000000000000000000000000000000000000000000000  my-archive.tar.gz\n";
+        let result = verify_checksum(checksums, "my-archive.tar.gz", b"actual data");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("checksum mismatch"));
     }
 }

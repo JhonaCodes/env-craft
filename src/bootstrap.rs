@@ -59,9 +59,9 @@ jobs:
           echo "Secret ${SECRET_NAME} is not available to this workflow." >&2
           exit 1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642195f882d025a3c667d10 # v4.4.0
         with:
           node-version: '22'
 
@@ -72,7 +72,7 @@ jobs:
         run: node .github/scripts/envcraft-deliver.mjs
 
       - name: Upload encrypted payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: envcraft-${{ inputs.request_id }}
           path: payload.json
@@ -181,6 +181,43 @@ mod tests {
         );
         let workflow =
             std::fs::read_to_string(dir.path().join(".github/workflows/deliver.yml")).unwrap();
-        assert!(workflow.contains("actions/checkout@v4"));
+        // Verify actions are pinned to full SHA, not mutable tags
+        assert!(workflow.contains("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"));
+        assert!(workflow.contains("actions/setup-node@49933ea5288caeca8642195f882d025a3c667d10"));
+        assert!(
+            workflow.contains("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02")
+        );
+        // Verify comment tags are present for readability
+        assert!(workflow.contains("# v4.2.2"));
+        assert!(workflow.contains("# v4.4.0"));
+        assert!(workflow.contains("# v4.6.2"));
+    }
+
+    #[test]
+    fn workflow_does_not_contain_mutable_tags() {
+        let dir = tempdir().unwrap();
+        let config = AppConfig {
+            github_owner: "JhonaCodes".to_string(),
+            control_repo: "envcraft-secrets".to_string(),
+            deliver_workflow: "deliver.yml".to_string(),
+            default_ref: "main".to_string(),
+            token_env_var: "GITHUB_TOKEN".to_string(),
+            control_repo_local_path: None,
+        };
+
+        bootstrap_control_plane(dir.path(), &config).unwrap();
+        let workflow =
+            std::fs::read_to_string(dir.path().join(".github/workflows/deliver.yml")).unwrap();
+
+        // No uses: line should end with a mutable @v* tag (only SHA pinning allowed)
+        for line in workflow.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("- uses:") || trimmed.starts_with("uses:") {
+                assert!(
+                    !trimmed.ends_with("@v4") && !trimmed.ends_with("@v3"),
+                    "found mutable tag in: {trimmed}"
+                );
+            }
+        }
     }
 }
