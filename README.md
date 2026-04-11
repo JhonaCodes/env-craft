@@ -61,7 +61,7 @@ Start here:
 - [Mental model](docs/mental-model.md)
 - [Context resolution](docs/context-resolution.md)
 - [GitHub App CI auth](docs/github-app.md)
-- [Future: migration and import flows](docs/future-migration.md)
+- [Future: migration, scaling, and hybrid secret storage](docs/future-migration.md)
 
 Command reference:
 
@@ -160,7 +160,7 @@ That guide covers:
 
 Planned, but not part of the current implementation:
 
-- [Future: migration and import flows](docs/future-migration.md)
+- [Future: migration, scaling, and hybrid secret storage](docs/future-migration.md)
 
 ## Typical workflows
 
