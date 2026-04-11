@@ -36,8 +36,8 @@ Run outside the repo:
 envcraft list \
   --remote \
   --env dev \
-  --project acordio_app \
-  --root /path/to/acordio_app
+  --project my_app \
+  --root /path/to/my_app
 ```
 
 ## Output
@@ -53,4 +53,3 @@ You will see:
 ## Common mistakes
 
 - expecting `list` to show secret values; it only shows metadata and availability
-

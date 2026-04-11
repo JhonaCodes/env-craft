@@ -19,8 +19,14 @@ EnvCraft solves that by using:
 ## Command
 
 ```bash
-envcraft github-app setup --ci-repo acordio_app
+envcraft github-app setup --ci-repo my-app
 ```
+
+Important:
+
+- `--ci-repo` expects the **GitHub repo slug**
+- for example `my-app`
+- that is different from the EnvCraft project slug `my_app`
 
 ## What it does
 
@@ -51,18 +57,18 @@ envcraft github-app status
 
 ```bash
 envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets
-envcraft github-app setup --ci-repo acordio_app
+envcraft github-app setup --ci-repo my-app
 envcraft github-app status
 ```
 
-Then, in `acordio_app` workflow:
+Then, in a project workflow:
 
 ```yaml
 env:
   ENVCRAFT_GITHUB_APP_ID: ${{ secrets.ENVCRAFT_GITHUB_APP_ID }}
   ENVCRAFT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.ENVCRAFT_GITHUB_APP_PRIVATE_KEY }}
 run: |
-  envcraft pull --env prod --project acordio_app --root . --output .env
+  envcraft pull --env prod --project my_app --root . --output .env
 ```
 
 ## Local storage

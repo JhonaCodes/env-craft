@@ -35,9 +35,9 @@ Run outside the repo:
 ```bash
 envcraft pull \
   --env dev \
-  --project acordio_app \
-  --root /path/to/acordio_app \
-  --output /tmp/acordio.env
+  --project my_app \
+  --root /path/to/my_app \
+  --output /tmp/my_app.env
 ```
 
 ## Expected side effects
@@ -67,7 +67,7 @@ Example in GitHub Actions:
     ENVCRAFT_GITHUB_APP_ID: ${{ secrets.ENVCRAFT_GITHUB_APP_ID }}
     ENVCRAFT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.ENVCRAFT_GITHUB_APP_PRIVATE_KEY }}
   run: |
-    envcraft pull --env prod --project acordio_app --root . --output .env
+    envcraft pull --env prod --project my_app --root . --output .env
 ```
 
 ## Common mistakes

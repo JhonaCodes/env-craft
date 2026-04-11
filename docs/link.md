@@ -31,18 +31,18 @@ envcraft link --project <project> --env <env> [--env <env> ...]
 Inside the repo:
 
 ```bash
-cd /path/to/acordio_app
-envcraft link --project acordio_app --env dev --env prod
+cd /path/to/my_app
+envcraft link --project my_app --env dev --env prod
 ```
 
 Outside the repo:
 
 ```bash
 envcraft link \
-  --project acordio_app \
+  --project my_app \
   --env dev \
   --env prod \
-  --root /path/to/acordio_app
+  --root /path/to/my_app
 ```
 
 ## Expected side effects
@@ -54,4 +54,3 @@ envcraft link \
 ## Common mistakes
 
 - expecting `link` to create GitHub Secrets; it only creates the project contract
-

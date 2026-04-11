@@ -27,7 +27,7 @@ source env.sh
 Write to an explicit file:
 
 ```bash
-envcraft deploy-inject --env prod --output /tmp/acordio-prod-env.sh
+envcraft deploy-inject --env prod --output /tmp/my-app-prod-env.sh
 ```
 
 Run outside the repo:
@@ -35,8 +35,8 @@ Run outside the repo:
 ```bash
 envcraft deploy-inject \
   --env prod \
-  --project acordio_app \
-  --root /path/to/acordio_app
+  --project my_app \
+  --root /path/to/my_app
 ```
 
 ## Expected behavior

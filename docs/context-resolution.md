@@ -13,7 +13,7 @@ If you run a command inside an application repo:
 Example:
 
 ```bash
-cd /path/to/acordio_app
+cd /path/to/my_app
 envcraft reveal API_BASE_URL --env dev
 ```
 
@@ -26,7 +26,7 @@ Example:
 ```bash
 envcraft reveal API_BASE_URL \
   --env dev \
-  --root /path/to/acordio_app
+  --root /path/to/my_app
 ```
 
 ## `--project`
@@ -42,9 +42,9 @@ Example:
 ```bash
 envcraft set API_BASE_URL \
   --env dev \
-  --project acordio_app \
-  --root /path/to/acordio_app \
-  --value https://api-dev.acordio.app
+  --project my_app \
+  --root /path/to/my_app \
+  --value https://api-dev.example.com
 ```
 
 ## Which commands use context
@@ -80,4 +80,3 @@ Commands that only read or deliver:
 - `pull`
 - `deploy-inject`
 - `upgrade`
-

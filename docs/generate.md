@@ -48,8 +48,8 @@ Outside the repo:
 ```bash
 envcraft generate \
   --env prod \
-  --project acordio_app \
-  --root /path/to/acordio_app \
+  --project my_app \
+  --root /path/to/my_app \
   --preset jwt
 ```
 
@@ -62,4 +62,3 @@ envcraft generate \
 ## Common mistakes
 
 - expecting `generate` to reveal values; use it only to create and store them
-

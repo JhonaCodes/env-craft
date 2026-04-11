@@ -26,7 +26,7 @@ envcraft upgrade
 Upgrade to a specific release:
 
 ```bash
-envcraft upgrade --version v0.1.5
+envcraft upgrade --version v0.1.6
 ```
 
 ## Expected side effects
@@ -37,4 +37,3 @@ envcraft upgrade --version v0.1.5
 ## Common mistakes
 
 - expecting `upgrade` to update the control-plane repo; use [init](init.md) for that
-

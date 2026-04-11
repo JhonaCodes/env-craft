@@ -224,22 +224,47 @@ fn seed_ci_repo_secrets(
     let mut seeded = Vec::new();
 
     for repo in ci_repos {
+        let (owner, repo_name) = resolve_ci_repo_target(config, &github, repo)?;
+        github.put_repo_secret(&owner, &repo_name, &config.github_app_id_env_var, app_id)?;
         github.put_repo_secret(
-            &config.github_owner,
-            repo,
-            &config.github_app_id_env_var,
-            app_id,
-        )?;
-        github.put_repo_secret(
-            &config.github_owner,
-            repo,
+            &owner,
+            &repo_name,
             &config.github_app_private_key_env_var,
             private_key_pem,
         )?;
-        seeded.push(repo.clone());
+        seeded.push(format!("{owner}/{repo_name}"));
     }
 
     Ok(seeded)
+}
+
+fn resolve_ci_repo_target(
+    config: &AppConfig,
+    github: &GitHubClient,
+    input: &str,
+) -> Result<(String, String)> {
+    let trimmed = input.trim();
+    let (owner, repo) = match trimmed.split_once('/') {
+        Some((owner, repo)) => (owner.trim().to_string(), repo.trim().to_string()),
+        None => (config.github_owner.clone(), trimmed.to_string()),
+    };
+
+    if github.get_repo(&owner, &repo)?.is_some() {
+        return Ok((owner, repo));
+    }
+
+    if !trimmed.contains('/') && repo.contains('_') {
+        let alternate = repo.replace('_', "-");
+        if alternate != repo && github.get_repo(&owner, &alternate)?.is_some() {
+            bail!(
+                "repository `{owner}/{repo}` was not found. Did you mean `{owner}/{alternate}`? Re-run `envcraft github-app setup --ci-repo {alternate}`"
+            );
+        }
+    }
+
+    bail!(
+        "repository `{owner}/{repo}` was not found. Pass the exact repository slug, for example `--ci-repo {owner}/your-repo`"
+    );
 }
 
 fn exchange_manifest_code(code: &str) -> Result<ManifestConversionResponse> {

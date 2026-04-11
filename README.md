@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.5 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.6 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.5
+envcraft upgrade --version v0.1.6
 ```
 
 If `envcraft` is not found after installation:
@@ -56,10 +56,12 @@ The intended usage model is:
 
 Start here:
 
+- [0 to 100 setup and deploy flow](docs/zero-to-deploy.md)
 - [Documentation index](docs/README.md)
 - [Mental model](docs/mental-model.md)
 - [Context resolution](docs/context-resolution.md)
 - [GitHub App CI auth](docs/github-app.md)
+- [Future: migration and import flows](docs/future-migration.md)
 
 Command reference:
 
@@ -113,7 +115,7 @@ envcraft init \
   --control-repo envcraft-secrets \
   --bootstrap-dir /path/to/envcraft-secrets
 
-envcraft github-app setup --ci-repo acordio_app
+envcraft github-app setup --ci-repo my-app
 
 envcraft link --project nui-app --env dev --env prod
 
@@ -136,6 +138,27 @@ envcraft set DB_PASSWORD --env prod --project nui-app --root /path/to/nui-app --
 ```
 
 For the complete command contract and more variants, use the docs in [`docs/`](docs/README.md).
+
+## 0 to 100 flow
+
+If you want the shortest full path from a fresh install to a working deploy, read:
+
+- [0 to 100 setup and deploy flow](docs/zero-to-deploy.md)
+
+That guide covers:
+
+- control-plane bootstrap
+- GitHub App setup
+- linking a project
+- storing secrets
+- building in GitHub Actions
+- deploying on a remote server or Dokploy
+
+## Future functionality
+
+Planned, but not part of the current implementation:
+
+- [Future: migration and import flows](docs/future-migration.md)
 
 ## Typical workflows
 
@@ -161,7 +184,7 @@ This single command now:
 To finish the CI auth path after `init`, run:
 
 ```bash
-envcraft github-app setup --ci-repo acordio_app
+envcraft github-app setup --ci-repo my-app
 ```
 
 That command registers the GitHub App, stores the App ID and PEM locally, and can seed the CI repository secrets automatically.
@@ -223,7 +246,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.5 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.6 bash
 ```
 
 Supported release assets:
@@ -231,7 +254,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.5`.
+To publish a release, push a semantic version tag such as `v0.1.6`.
 
 ## Control-plane bootstrap
 
@@ -267,7 +290,7 @@ vars:
   - installer script
 - target application repo:
   - local `.envcraft.schema`
-  - for example `acordio_app/.envcraft.schema`
+  - for example `my_app/.envcraft.schema`
 - control-plane repo such as `envcraft-secrets`:
   - delivery workflow
   - control-plane script

@@ -33,13 +33,13 @@ envcraft set <LOGICAL_KEY> --env <env>
 Set a dev value explicitly:
 
 ```bash
-envcraft set API_BASE_URL --env dev --value https://api-dev.acordio.app
+envcraft set API_BASE_URL --env dev --value https://api-dev.example.com
 ```
 
 Set a prod value explicitly:
 
 ```bash
-envcraft set API_BASE_URL --env prod --value https://api.acordio.app
+envcraft set API_BASE_URL --env prod --value https://api.example.com
 ```
 
 Prompt interactively:
@@ -59,14 +59,14 @@ Run outside the repo:
 ```bash
 envcraft set API_BASE_URL \
   --env dev \
-  --project acordio_app \
-  --root /path/to/acordio_app \
-  --value https://api-dev.acordio.app
+  --project my_app \
+  --root /path/to/my_app \
+  --value https://api-dev.example.com
 ```
 
 ## Expected side effects
 
-- stores a remote secret like `ACORDIO_APP_DEV_API_BASE_URL`
+- stores a remote secret like `MY_APP_DEV_API_BASE_URL`
 - updates the project schema so the variable exists for that environment
 - syncs the project schema into the control-plane repo
 
@@ -80,4 +80,3 @@ envcraft set API_BASE_URL \
 - [list](list.md)
 - [reveal](reveal.md)
 - [pull](pull.md)
-

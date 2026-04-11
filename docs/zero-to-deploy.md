@@ -1,0 +1,247 @@
+# EnvCraft 0 to 100
+
+This is the shortest end-to-end setup path for EnvCraft.
+
+It covers:
+
+- first-time control-plane setup
+- linking one project
+- storing secrets
+- GitHub Actions builds
+- remote server or Dokploy deploys
+
+Use this document when you want the full operational flow instead of isolated command docs.
+
+## Two names you must not mix
+
+EnvCraft usually deals with two different names:
+
+- **GitHub repo slug**
+  - example: `my-app`
+  - used for `--ci-repo` when seeding Actions secrets for a repository
+- **EnvCraft project slug**
+  - example: `my_app`
+  - used inside `.envcraft.schema` and with `--project`
+
+## Prerequisites
+
+- `envcraft` installed globally
+- GitHub auth available locally through `gh auth login` or `GITHUB_TOKEN`
+- a private control-plane repo name, for example `envcraft-secrets`
+- a target application repo, for example `my-org/my-app`
+
+## Phase 1: Bootstrap the control plane
+
+Run this once:
+
+```bash
+envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets
+```
+
+This does:
+
+- creates the private control-plane repo if it does not exist
+- clones it locally under `~/.envcraft/repos/envcraft-secrets`
+- writes the delivery workflow and script
+- writes control-plane notes under `.envcraft/`
+- saves global config in `~/.envcraft/config.toml`
+
+After this, the control plane exists, but CI auth is not finished yet.
+
+## Phase 2: Register the GitHub App for CI
+
+Run:
+
+```bash
+envcraft github-app setup --ci-repo my-app
+```
+
+This does:
+
+- starts the GitHub App manifest flow
+- registers a GitHub App
+- stores the App ID and PEM locally under `~/.envcraft/github-apps/`
+- writes these Actions secrets into the CI repository:
+  - `ENVCRAFT_GITHUB_APP_ID`
+  - `ENVCRAFT_GITHUB_APP_PRIVATE_KEY`
+
+Then do the one manual GitHub step that cannot be skipped:
+
+- open the install URL printed by EnvCraft
+- install the GitHub App on `JhonaCodes/envcraft-secrets`
+
+Validate:
+
+```bash
+envcraft github-app status
+```
+
+## Phase 3: Link one project repository
+
+Inside the project repo:
+
+```bash
+cd /path/to/my_app
+envcraft link --project my_app --env dev --env prod
+```
+
+This creates `.envcraft.schema`.
+
+That file is the contract for:
+
+- which logical variables exist
+- which environments exist
+- how EnvCraft resolves names for GitHub Secrets
+
+## Phase 4: Add secrets
+
+Examples:
+
+```bash
+envcraft set API_BASE_URL --env dev
+envcraft set API_BASE_URL --env prod
+envcraft set LEGAL_BASE_URL --env prod --value https://legal.example.com
+envcraft set DB_PASSWORD --env prod --generate
+```
+
+What `envcraft set` does:
+
+- creates or updates the GitHub Secret in the control-plane repo
+- updates local `.envcraft.schema`
+- syncs the schema into `envcraft-secrets/projects/<project>/.envcraft.schema`
+
+Verify:
+
+```bash
+envcraft list --remote --env prod
+```
+
+## Phase 5A: Build with GitHub Actions
+
+Use this path when your application is compiled in GitHub Actions.
+
+Typical use case:
+
+- Flutter
+- frontend builds
+- any project where values become part of the build output
+
+Workflow pattern:
+
+```yaml
+- name: Install EnvCraft
+  run: curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | bash
+
+- name: Resolve build env
+  env:
+    ENVCRAFT_GITHUB_APP_ID: ${{ secrets.ENVCRAFT_GITHUB_APP_ID }}
+    ENVCRAFT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.ENVCRAFT_GITHUB_APP_PRIVATE_KEY }}
+  run: |
+    envcraft pull --env prod --project my_app --root . --output .env
+```
+
+Then continue with your normal build:
+
+```yaml
+- name: Generate code
+  run: dart run build_runner build --delete-conflicting-outputs
+
+- name: Build app
+  run: flutter build appbundle --release
+```
+
+Use `pull` in CI when:
+
+- the app needs a `.env` during compilation
+- values are part of the generated or compiled artifact
+
+Do **not** use `deploy-inject` for that case.
+
+## Phase 5B: Deploy to a remote server or Dokploy
+
+Use this path when the application runs on a remote host and should receive secrets right before runtime.
+
+Typical use case:
+
+- API
+- worker
+- Docker container runtime
+- Dokploy prestart/init hook
+
+Install `envcraft` on the server first.
+
+Then run:
+
+```bash
+envcraft deploy-inject --env prod > /tmp/envcraft.env.sh
+source /tmp/envcraft.env.sh
+./your-process
+```
+
+Or inside a deploy script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+envcraft deploy-inject --env prod > /tmp/myapp.env.sh
+source /tmp/myapp.env.sh
+exec docker compose up -d
+```
+
+For non-interactive remote servers, provide CI-style auth:
+
+- `ENVCRAFT_GITHUB_APP_ID`
+- `ENVCRAFT_GITHUB_APP_PRIVATE_KEY`
+
+Use `deploy-inject` when:
+
+- you want secrets at runtime, not build time
+- you do not want secrets baked into Docker layers
+- Dokploy or the host is the deploy executor
+
+Do **not** use `deploy-inject` inside a `Dockerfile`.
+
+## Which command to use
+
+Use `pull` when:
+
+- the build step needs `.env`
+- the values are consumed during compilation
+- the result is a file like `.env`, `.env.dev`, or `.env.prod`
+
+Use `deploy-inject` when:
+
+- the process needs exported environment variables right before it starts
+- the target is a server, container runtime, or Dokploy hook
+
+## First real test path
+
+If you want the shortest possible proof that EnvCraft works:
+
+1. `envcraft init --github-owner JhonaCodes --control-repo envcraft-secrets`
+2. `envcraft github-app setup --ci-repo my-app`
+3. install the GitHub App on `JhonaCodes/envcraft-secrets`
+4. `cd /path/to/my_app`
+5. `envcraft link --project my_app --env dev --env prod`
+6. `envcraft set API_BASE_URL --env prod`
+7. `envcraft reveal API_BASE_URL --env prod`
+8. wire `envcraft pull --env prod --output .env` into GitHub Actions
+9. run one successful build
+
+For a remote-server proof:
+
+1. install `envcraft` on the host
+2. ensure the host has GitHub App credentials
+3. run `envcraft deploy-inject --env prod`
+4. source the output
+5. start the process
+
+## Common mistakes
+
+- Using `my_app` as the GitHub repo slug in `--ci-repo`
+- Using `my-app` as the EnvCraft project slug in `--project`
+- Assuming `init` also finishes CI auth
+- Forgetting to install the GitHub App on the control-plane repo after `github-app setup`
+- Using `deploy-inject` in a `Dockerfile`
+- Expecting `pull` to mutate secrets; it only reads through GitHub Actions

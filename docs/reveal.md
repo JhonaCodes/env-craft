@@ -45,8 +45,8 @@ Run outside the repo:
 ```bash
 envcraft reveal API_BASE_URL \
   --env prod \
-  --project acordio_app \
-  --root /path/to/acordio_app
+  --project my_app \
+  --root /path/to/my_app
 ```
 
 ## Expected behavior
@@ -59,4 +59,3 @@ envcraft reveal API_BASE_URL \
 ## Common mistakes
 
 - using `reveal` when you actually want a full `.env`; use [pull](pull.md)
-

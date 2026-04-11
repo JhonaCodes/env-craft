@@ -87,7 +87,7 @@ ENVCRAFT_GITHUB_TOKEN is a legacy fallback."
 enum GitHubAppCommand {
     #[command(
         about = "Create the EnvCraft GitHub App through the manifest flow and optionally seed CI secrets",
-        after_help = "Examples:\n  envcraft github-app setup --ci-repo acordio_app\n  envcraft github-app setup --ci-repo acordio_app --ci-repo another_app --no-open"
+        after_help = "Examples:\n  envcraft github-app setup --ci-repo my-app\n  envcraft github-app setup --ci-repo my-org/my-app --ci-repo another-repo --no-open"
     )]
     Setup(GitHubAppSetupArgs),
     #[command(about = "Show the locally stored GitHub App status and CI secret names")]
@@ -186,7 +186,7 @@ struct ListArgs {
 struct GitHubAppSetupArgs {
     #[arg(
         long = "ci-repo",
-        help = "Repository that should receive ENVCRAFT_GITHUB_APP_ID and ENVCRAFT_GITHUB_APP_PRIVATE_KEY as Actions secrets"
+        help = "Repository that should receive ENVCRAFT_GITHUB_APP_ID and ENVCRAFT_GITHUB_APP_PRIVATE_KEY as Actions secrets. Accepts repo or owner/repo."
     )]
     ci_repos: Vec<String>,
     #[arg(
@@ -198,7 +198,7 @@ struct GitHubAppSetupArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.5")]
+#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.6")]
 struct UpgradeArgs {
     #[arg(long)]
     version: Option<String>,
@@ -206,7 +206,7 @@ struct UpgradeArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft pull --env prod --project acordio_app --root . --output .env\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
+    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft pull --env prod --project my_app --root . --output .env\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
 )]
 struct PullArgs {
     #[arg(
@@ -234,7 +234,7 @@ struct PullArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft deploy-inject --env prod > env.sh\n  envcraft deploy-inject --env prod --output /tmp/acordio-prod-env.sh\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
+    after_help = "Examples:\n  envcraft deploy-inject --env prod > env.sh\n  envcraft deploy-inject --env prod --output /tmp/my-app-prod-env.sh\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
 )]
 struct DeployInjectArgs {
     #[arg(

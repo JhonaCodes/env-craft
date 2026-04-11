@@ -2,13 +2,17 @@
 
 EnvCraft is easiest to understand in this order:
 
-1. [Mental model](mental-model.md)
-2. [Context resolution](context-resolution.md)
-3. [GitHub App CI auth](github-app.md)
-4. The command you want to run
+1. [0 to 100 setup and deploy flow](zero-to-deploy.md)
+2. [Mental model](mental-model.md)
+3. [Context resolution](context-resolution.md)
+4. [GitHub App CI auth](github-app.md)
+5. [Future: migration and import flows](future-migration.md)
+6. The command you want to run
 
 ## Command reference
 
+- [0 to 100 setup and deploy flow](zero-to-deploy.md)
+- [Future: migration and import flows](future-migration.md)
 - [init](init.md)
 - [link](link.md)
 - [set](set.md)
@@ -21,6 +25,12 @@ EnvCraft is easiest to understand in this order:
 - [upgrade](upgrade.md)
 
 ## Suggested reading paths
+
+- Full setup, CI, and deployment:
+  - [0 to 100 setup and deploy flow](zero-to-deploy.md)
+
+- Future roadmap for import and migration:
+  - [Future: migration and import flows](future-migration.md)
 
 - First-time setup:
   - [init](init.md)
