@@ -78,6 +78,12 @@ pub struct AuthenticatedUser {
     pub login: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubAppSummary {
+    pub id: u64,
+    pub slug: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct EnsureRepoResult {
     pub repo: Repository,
@@ -236,6 +242,40 @@ impl GitHubClient {
                     let repo: Repository = serde_json::from_slice(&output.stdout)
                         .context("failed to decode repository payload")?;
                     return Ok(Some(repo));
+                }
+
+                if gh_output_indicates_status(&output, 404) {
+                    return Ok(None);
+                }
+
+                Err(gh_api_error("GET", &url, &output))
+            }
+        }
+    }
+
+    pub fn get_app_by_slug(&self, slug: &str) -> Result<Option<GitHubAppSummary>> {
+        let url = format!("{API_BASE}/apps/{slug}");
+
+        match &self.backend {
+            GitHubBackend::Http(http) => {
+                let response = http.get(url).send()?;
+
+                match response.status().as_u16() {
+                    200 => Ok(Some(
+                        response
+                            .json()
+                            .context("failed to decode GitHub App payload")?,
+                    )),
+                    404 => Ok(None),
+                    _ => Err(read_error(response)),
+                }
+            }
+            GitHubBackend::GhCli => {
+                let output = self.run_gh_api("GET", &url, None)?;
+                if output.status.success() {
+                    let app: GitHubAppSummary = serde_json::from_slice(&output.stdout)
+                        .context("failed to decode GitHub App payload")?;
+                    return Ok(Some(app));
                 }
 
                 if gh_output_indicates_status(&output, 404) {

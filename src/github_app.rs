@@ -77,14 +77,19 @@ pub fn setup_github_app(config: &AppConfig, open_browser: bool) -> Result<GitHub
     config.ensure_local_dirs()?;
 
     if let Some(metadata) = load_stored_metadata(config)? {
-        return Ok(GitHubAppSetupResult {
-            app_id: metadata.app_id,
-            slug: metadata.slug,
-            install_url: metadata.install_url,
-            launcher_path: None,
-            seeded_ci_repos: Vec::new(),
-            created: false,
-        });
+        let github = GitHubClient::from_token_source(&config.token_env_var)?;
+        if github.get_app_by_slug(&metadata.slug)?.is_some() {
+            return Ok(GitHubAppSetupResult {
+                app_id: metadata.app_id,
+                slug: metadata.slug,
+                install_url: metadata.install_url,
+                launcher_path: None,
+                seeded_ci_repos: Vec::new(),
+                created: false,
+            });
+        }
+
+        remove_stale_github_app(config)?;
     }
 
     let state = Uuid::new_v4().to_string();
@@ -244,6 +249,31 @@ fn persist_github_app(
         &metadata_path,
         toml::to_string_pretty(&metadata)?.as_bytes(),
     )?;
+    Ok(())
+}
+
+fn remove_stale_github_app(config: &AppConfig) -> Result<()> {
+    let key_path = config.github_app_private_key_path()?;
+    let metadata_path = config.github_app_metadata_path()?;
+
+    if metadata_path.exists() {
+        fs::remove_file(&metadata_path).with_context(|| {
+            format!(
+                "failed to remove stale GitHub App metadata at {}",
+                metadata_path.display()
+            )
+        })?;
+    }
+
+    if key_path.exists() {
+        fs::remove_file(&key_path).with_context(|| {
+            format!(
+                "failed to remove stale GitHub App private key at {}",
+                key_path.display()
+            )
+        })?;
+    }
+
     Ok(())
 }
 

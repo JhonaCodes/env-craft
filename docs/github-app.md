@@ -38,6 +38,8 @@ Important:
 
 If the app already exists locally, `setup` reuses it and only prints the existing app details.
 
+If the app exists locally but was deleted in GitHub, `setup` detects the stale local state, removes it, and starts a fresh registration flow.
+
 ## What `connect` does
 
 - reuses the existing locally stored GitHub App
@@ -105,6 +107,7 @@ Those files are for local reuse only. CI should still use repository secrets.
 
 - Assuming every repo needs GitHub App secrets. Only repos that run EnvCraft in CI need them.
 - Running `setup` as if it should create a separate GitHub App per project. EnvCraft should use one app per control plane, then `connect` more repos to it.
+- Deleting the GitHub App in GitHub and expecting old local metadata to keep working. Re-run `envcraft github-app setup` so EnvCraft can recreate it.
 - Installing the app on the CI repo but not the control-plane repo.
 - Keeping only `ENVCRAFT_GITHUB_TOKEN` and forgetting to migrate the workflow env vars.
 - Expecting `envcraft init` alone to finish CI auth. `init` bootstraps the control plane; `github-app setup` finishes the CI auth path.
