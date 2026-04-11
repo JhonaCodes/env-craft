@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod fs_sec;
 pub mod github;
+pub mod github_app;
 pub mod naming;
 pub mod schema;
 pub mod secrets;

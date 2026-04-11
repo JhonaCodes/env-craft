@@ -4,7 +4,8 @@ EnvCraft is easiest to understand in this order:
 
 1. [Mental model](mental-model.md)
 2. [Context resolution](context-resolution.md)
-3. The command you want to run
+3. [GitHub App CI auth](github-app.md)
+4. The command you want to run
 
 ## Command reference
 
@@ -13,6 +14,7 @@ EnvCraft is easiest to understand in this order:
 - [set](set.md)
 - [generate](generate.md)
 - [list](list.md)
+- [github-app](github-app.md)
 - [reveal](reveal.md)
 - [pull](pull.md)
 - [deploy-inject](deploy-inject.md)
@@ -22,6 +24,7 @@ EnvCraft is easiest to understand in this order:
 
 - First-time setup:
   - [init](init.md)
+  - [GitHub App CI auth](github-app.md)
   - [link](link.md)
 - Add a new variable:
   - [set](set.md)
@@ -34,4 +37,3 @@ EnvCraft is easiest to understand in this order:
   - [deploy-inject](deploy-inject.md)
 - Work from outside a repo:
   - [Context resolution](context-resolution.md)
-

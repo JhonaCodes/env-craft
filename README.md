@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.4 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.5 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.4
+envcraft upgrade --version v0.1.5
 ```
 
 If `envcraft` is not found after installation:
@@ -59,6 +59,7 @@ Start here:
 - [Documentation index](docs/README.md)
 - [Mental model](docs/mental-model.md)
 - [Context resolution](docs/context-resolution.md)
+- [GitHub App CI auth](docs/github-app.md)
 
 Command reference:
 
@@ -67,6 +68,7 @@ Command reference:
 - [set](docs/set.md)
 - [generate](docs/generate.md)
 - [list](docs/list.md)
+- [github-app](docs/github-app.md)
 - [reveal](docs/reveal.md)
 - [pull](docs/pull.md)
 - [deploy-inject](docs/deploy-inject.md)
@@ -111,6 +113,8 @@ envcraft init \
   --control-repo envcraft-secrets \
   --bootstrap-dir /path/to/envcraft-secrets
 
+envcraft github-app setup --ci-repo acordio_app
+
 envcraft link --project nui-app --env dev --env prod
 
 envcraft set DB_PASSWORD --env prod --generate
@@ -146,12 +150,21 @@ envcraft init \
 
 This single command now:
 - reads your GitHub auth from `GITHUB_TOKEN`
+- or prefers GitHub App credentials from `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` / `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
 - or falls back to your local `gh` session automatically from inside `envcraft`
 - creates the private `envcraft-secrets` repository if it does not exist
 - clones or updates the local control-plane checkout
 - writes the control-plane workflow files
 - commits and pushes the bootstrap if there are changes
 - saves the global EnvCraft config in `~/.envcraft/config.toml`
+
+To finish the CI auth path after `init`, run:
+
+```bash
+envcraft github-app setup --ci-repo acordio_app
+```
+
+That command registers the GitHub App, stores the App ID and PEM locally, and can seed the CI repository secrets automatically.
 
 ### 2. Link an application repository
 
@@ -180,9 +193,11 @@ envcraft pull --env dev --output .env.dev
 Each requested logical key is resolved through a one-time GitHub Actions workflow and assembled into a local `.env` file.
 
 CI note:
-- only repositories or workflows that run `envcraft` inside GitHub Actions against a private control-plane repo need a dedicated token such as `ENVCRAFT_GITHUB_TOKEN`
+- only repositories or workflows that run `envcraft` inside GitHub Actions against a private control-plane repo need dedicated non-interactive auth
+- prefer `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` or `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
+- `ENVCRAFT_GITHUB_TOKEN` is a legacy fallback
 - local development usually does not need this because `envcraft` can use your interactive GitHub auth
-- repositories that never run EnvCraft in CI do not need to add `ENVCRAFT_GITHUB_TOKEN`
+- repositories that never run EnvCraft in CI do not need to add these values
 
 ### 5. Inject secrets for deployment
 
@@ -193,7 +208,7 @@ source env.sh
 
 This is the intended V1 integration point for Dokploy prestart or init hooks: Dokploy still builds and deploys, while EnvCraft resolves secrets right before runtime.
 
-If the deploy step runs inside GitHub Actions from another private repo, that workflow also needs a token such as `ENVCRAFT_GITHUB_TOKEN` with access to the private control-plane repo.
+If the deploy step runs inside GitHub Actions from another private repo, that workflow should prefer a GitHub App installation with access to the private control-plane repo.
 
 ## Release installation
 
@@ -208,7 +223,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.4 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.5 bash
 ```
 
 Supported release assets:
@@ -216,7 +231,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.4`.
+To publish a release, push a semantic version tag such as `v0.1.5`.
 
 ## Control-plane bootstrap
 

@@ -18,6 +18,12 @@ pub struct AppConfig {
     pub default_ref: String,
     #[serde(default = "default_token_env_var")]
     pub token_env_var: String,
+    #[serde(default = "default_github_app_id_env_var")]
+    pub github_app_id_env_var: String,
+    #[serde(default = "default_github_app_private_key_env_var")]
+    pub github_app_private_key_env_var: String,
+    #[serde(default = "default_github_app_private_key_file_env_var")]
+    pub github_app_private_key_file_env_var: String,
     #[serde(default)]
     pub control_repo_local_path: Option<PathBuf>,
 }
@@ -32,6 +38,18 @@ fn default_branch() -> String {
 
 fn default_token_env_var() -> String {
     "GITHUB_TOKEN".to_string()
+}
+
+fn default_github_app_id_env_var() -> String {
+    "ENVCRAFT_GITHUB_APP_ID".to_string()
+}
+
+fn default_github_app_private_key_env_var() -> String {
+    "ENVCRAFT_GITHUB_APP_PRIVATE_KEY".to_string()
+}
+
+fn default_github_app_private_key_file_env_var() -> String {
+    "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string()
 }
 
 impl AppConfig {
@@ -64,6 +82,10 @@ impl AppConfig {
         Ok(Self::config_dir()?.join("repos"))
     }
 
+    pub fn github_apps_dir() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("github-apps"))
+    }
+
     pub fn default_control_repo_path(&self) -> Result<PathBuf> {
         Ok(Self::control_repos_dir()?.join(&self.control_repo))
     }
@@ -81,7 +103,18 @@ impl AppConfig {
         fs_sec::create_restricted_dir(&Self::requests_dir()?)?;
         fs_sec::create_restricted_dir(&Self::artifacts_dir()?)?;
         fs_sec::create_restricted_dir(&Self::control_repos_dir()?)?;
+        fs_sec::create_restricted_dir(&Self::github_apps_dir()?)?;
         Ok(())
+    }
+
+    pub fn github_app_private_key_path(&self) -> Result<PathBuf> {
+        Ok(Self::github_apps_dir()?
+            .join(format!("{}-{}.pem", self.github_owner, self.control_repo)))
+    }
+
+    pub fn github_app_metadata_path(&self) -> Result<PathBuf> {
+        Ok(Self::github_apps_dir()?
+            .join(format!("{}-{}.toml", self.github_owner, self.control_repo)))
     }
 
     pub fn save(&self) -> Result<PathBuf> {
@@ -156,6 +189,9 @@ mod tests {
             deliver_workflow: "deliver.yml".to_string(),
             default_ref: "main".to_string(),
             token_env_var: "GITHUB_TOKEN".to_string(),
+            github_app_id_env_var: "ENVCRAFT_GITHUB_APP_ID".to_string(),
+            github_app_private_key_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY".to_string(),
+            github_app_private_key_file_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string(),
             control_repo_local_path: None,
         };
 
@@ -170,6 +206,9 @@ mod tests {
             deliver_workflow: "deliver.yml".to_string(),
             default_ref: "main".to_string(),
             token_env_var: "GITHUB_TOKEN".to_string(),
+            github_app_id_env_var: "ENVCRAFT_GITHUB_APP_ID".to_string(),
+            github_app_private_key_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY".to_string(),
+            github_app_private_key_file_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string(),
             control_repo_local_path: None,
         };
 
@@ -188,6 +227,9 @@ mod tests {
             deliver_workflow: "deliver.yml".to_string(),
             default_ref: "main".to_string(),
             token_env_var: "GITHUB_TOKEN".to_string(),
+            github_app_id_env_var: "ENVCRAFT_GITHUB_APP_ID".to_string(),
+            github_app_private_key_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY".to_string(),
+            github_app_private_key_file_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string(),
             control_repo_local_path: Some(dir.path().join("repos/test-secrets")),
         };
 
@@ -199,11 +241,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&restricted)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777;
+            let mode = std::fs::metadata(&restricted).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o700, "directory should be owner-only (0o700)");
         }
 

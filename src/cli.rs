@@ -14,6 +14,7 @@ use crate::{
     config::AppConfig,
     fs_sec,
     github::GitHubClient,
+    github_app::{load_stored_metadata, setup_github_app},
     schema::ProjectSchema,
     secrets::{StackPreset, generate_from_presets, generate_secret_like},
     session::{DeliverySession, purge_expired_sessions},
@@ -46,6 +47,12 @@ enum Command {
     Generate(GenerateArgs),
     #[command(about = "List logical variables and, optionally, remote secret availability")]
     List(ListArgs),
+    #[command(
+        name = "github-app",
+        subcommand,
+        about = "Register and inspect the EnvCraft GitHub App used by CI"
+    )]
+    GitHubApp(GitHubAppCommand),
     #[command(about = "Download the latest EnvCraft release and replace the current binary")]
     Upgrade(UpgradeArgs),
     #[command(
@@ -54,7 +61,9 @@ enum Command {
 Context: EnvCraft resolves the active project from the current directory's .envcraft.schema by default. \
 Use --project and --root only when running from another directory.\n\n\
 CI auth: Only workflows that run EnvCraft inside GitHub Actions against a private control-plane repo \
-need a dedicated token such as ENVCRAFT_GITHUB_TOKEN. Local interactive shells usually do not."
+should prefer GitHub App credentials through ENVCRAFT_GITHUB_APP_ID plus \
+ENVCRAFT_GITHUB_APP_PRIVATE_KEY or ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE. \
+ENVCRAFT_GITHUB_TOKEN is a legacy fallback."
     )]
     Pull(PullArgs),
     #[command(about = "Reveal one logical key through a one-time GitHub Actions delivery flow")]
@@ -67,9 +76,22 @@ Do not use it inside Dockerfile build stages.\n\n\
 Context: EnvCraft resolves the active project from the current directory's .envcraft.schema by default. \
 Use --project and --root only when running from another directory.\n\n\
 CI auth: Only workflows that run EnvCraft inside GitHub Actions against a private control-plane repo \
-need a dedicated token such as ENVCRAFT_GITHUB_TOKEN. Local interactive shells usually do not."
+should prefer GitHub App credentials through ENVCRAFT_GITHUB_APP_ID plus \
+ENVCRAFT_GITHUB_APP_PRIVATE_KEY or ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE. \
+ENVCRAFT_GITHUB_TOKEN is a legacy fallback."
     )]
     DeployInject(DeployInjectArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum GitHubAppCommand {
+    #[command(
+        about = "Create the EnvCraft GitHub App through the manifest flow and optionally seed CI secrets",
+        after_help = "Examples:\n  envcraft github-app setup --ci-repo acordio_app\n  envcraft github-app setup --ci-repo acordio_app --ci-repo another_app --no-open"
+    )]
+    Setup(GitHubAppSetupArgs),
+    #[command(about = "Show the locally stored GitHub App status and CI secret names")]
+    Status,
 }
 
 #[derive(Debug, Args)]
@@ -161,7 +183,22 @@ struct ListArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.1")]
+struct GitHubAppSetupArgs {
+    #[arg(
+        long = "ci-repo",
+        help = "Repository that should receive ENVCRAFT_GITHUB_APP_ID and ENVCRAFT_GITHUB_APP_PRIVATE_KEY as Actions secrets"
+    )]
+    ci_repos: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Do not try to open the GitHub App registration page automatically"
+    )]
+    no_open: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.5")]
 struct UpgradeArgs {
     #[arg(long)]
     version: Option<String>,
@@ -169,7 +206,7 @@ struct UpgradeArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft pull --env prod --project acordio_app --root . --output .env\n\nCI note:\n  Only GitHub Actions workflows that need access to a private control-plane repo require\n  a token such as ENVCRAFT_GITHUB_TOKEN."
+    after_help = "Examples:\n  envcraft pull --env dev --output .env.dev\n  envcraft pull --env prod --project acordio_app --root . --output .env\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
 )]
 struct PullArgs {
     #[arg(
@@ -197,7 +234,7 @@ struct PullArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Examples:\n  envcraft deploy-inject --env prod > env.sh\n  envcraft deploy-inject --env prod --output /tmp/acordio-prod-env.sh\n\nCI note:\n  Only GitHub Actions workflows that need access to a private control-plane repo require\n  a token such as ENVCRAFT_GITHUB_TOKEN."
+    after_help = "Examples:\n  envcraft deploy-inject --env prod > env.sh\n  envcraft deploy-inject --env prod --output /tmp/acordio-prod-env.sh\n\nCI note:\n  Prefer ENVCRAFT_GITHUB_APP_ID plus ENVCRAFT_GITHUB_APP_PRIVATE_KEY.\n  ENVCRAFT_GITHUB_TOKEN is only a legacy fallback."
 )]
 struct DeployInjectArgs {
     #[arg(
@@ -243,10 +280,18 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Set(args) => set(args),
         Command::Generate(args) => generate(args),
         Command::List(args) => list(args),
+        Command::GitHubApp(command) => github_app(command),
         Command::Upgrade(args) => upgrade(args),
         Command::Pull(args) => pull(args),
         Command::Reveal(args) => reveal(args),
         Command::DeployInject(args) => deploy_inject(args),
+    }
+}
+
+fn github_app(command: GitHubAppCommand) -> Result<()> {
+    match command {
+        GitHubAppCommand::Setup(args) => github_app_setup(args),
+        GitHubAppCommand::Status => github_app_status(),
     }
 }
 
@@ -257,6 +302,9 @@ fn init(args: InitArgs) -> Result<()> {
         deliver_workflow: args.workflow,
         default_ref: args.git_ref,
         token_env_var: args.token_env_var,
+        github_app_id_env_var: "ENVCRAFT_GITHUB_APP_ID".to_string(),
+        github_app_private_key_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY".to_string(),
+        github_app_private_key_file_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string(),
         control_repo_local_path: None,
     };
     let bootstrap_dir = args
@@ -264,7 +312,7 @@ fn init(args: InitArgs) -> Result<()> {
         .unwrap_or(config.default_control_repo_path()?);
     config.control_repo_local_path = Some(bootstrap_dir.clone());
     config.ensure_local_dirs()?;
-    let github = GitHubClient::from_token_source(&config.token_env_var)?;
+    let github = GitHubClient::from_config(&config)?;
     let ensured = github.ensure_private_repo(&config.github_owner, &config.control_repo)?;
     config.default_ref = ensured.repo.default_branch.clone();
     ensure_local_control_repo(
@@ -293,6 +341,10 @@ fn init(args: InitArgs) -> Result<()> {
     for file in created {
         println!("  wrote {}", file.display());
     }
+    println!(
+        "Next CI auth step: run `envcraft github-app setup --ci-repo <repo>` to create the GitHub App and seed {} / {} in your CI repositories.",
+        config.github_app_id_env_var, config.github_app_private_key_env_var
+    );
 
     Ok(())
 }
@@ -459,6 +511,89 @@ fn list(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
+fn github_app_setup(args: GitHubAppSetupArgs) -> Result<()> {
+    let config = AppConfig::load()?;
+    let result = setup_github_app(&config, &args.ci_repos, !args.no_open)?;
+    println!("Registered GitHub App {} ({})", result.slug, result.app_id);
+    println!("Launcher page: {}", result.launcher_path.display());
+    println!("Install URL: {}", result.install_url);
+    if result.seeded_ci_repos.is_empty() {
+        println!(
+            "No CI repos were seeded automatically. Store {} and {} in every CI repository that runs EnvCraft.",
+            config.github_app_id_env_var, config.github_app_private_key_env_var
+        );
+    } else {
+        println!(
+            "Seeded {} and {} in: {}",
+            config.github_app_id_env_var,
+            config.github_app_private_key_env_var,
+            result.seeded_ci_repos.join(", ")
+        );
+    }
+    println!(
+        "Install the app on {} so EnvCraft can mint installation tokens for the control plane.",
+        config.control_repo_slug()
+    );
+    Ok(())
+}
+
+fn github_app_status() -> Result<()> {
+    let config = AppConfig::load()?;
+    println!("control-plane repo: {}", config.control_repo_slug());
+    println!(
+        "CI secret names: {}, {}",
+        config.github_app_id_env_var, config.github_app_private_key_env_var
+    );
+
+    match load_stored_metadata(&config)? {
+        Some(metadata) => {
+            println!("stored app id: {}", metadata.app_id);
+            println!("stored slug: {}", metadata.slug);
+            println!("install url: {}", metadata.install_url);
+            println!(
+                "stored private key: {}",
+                config.github_app_private_key_path()?.display()
+            );
+        }
+        None => {
+            println!("stored app id: not configured");
+            println!(
+                "run `envcraft github-app setup --ci-repo <repo>` to create and store the GitHub App locally"
+            );
+        }
+    }
+
+    println!(
+        "{} override: {}",
+        config.github_app_id_env_var,
+        if std::env::var(&config.github_app_id_env_var).is_ok() {
+            "set"
+        } else {
+            "unset"
+        }
+    );
+    println!(
+        "{} override: {}",
+        config.github_app_private_key_env_var,
+        if std::env::var(&config.github_app_private_key_env_var).is_ok() {
+            "set"
+        } else {
+            "unset"
+        }
+    );
+    println!(
+        "{} override: {}",
+        config.github_app_private_key_file_env_var,
+        if std::env::var(&config.github_app_private_key_file_env_var).is_ok() {
+            "set"
+        } else {
+            "unset"
+        }
+    );
+
+    Ok(())
+}
+
 fn upgrade(args: UpgradeArgs) -> Result<()> {
     let version_label = args.version.as_deref().unwrap_or("latest");
     let installed_path = upgrade_binary(args.version.as_deref())?;
@@ -529,7 +664,10 @@ fn reveal(args: RevealArgs) -> Result<()> {
     )?;
 
     if let Some(path) = args.output {
-        fs_sec::write_secret_file(&path, format!("{}={}\n", args.logical_key, value).as_bytes())?;
+        fs_sec::write_secret_file(
+            &path,
+            format!("{}={}\n", args.logical_key, value).as_bytes(),
+        )?;
         println!("Wrote reveal output to {}", path.display());
     } else {
         println!("{value}");

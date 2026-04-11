@@ -30,13 +30,14 @@ EnvCraft can run in two broad contexts:
 
 2. Non-interactive CI such as GitHub Actions
    - There is no interactive `gh` session to reuse
-   - You must provide a token explicitly through an environment variable such as `GITHUB_TOKEN`
+   - Prefer GitHub App credentials through `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` or `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
+   - EnvCraft can still use an explicit token through `GITHUB_TOKEN` as a legacy fallback
    - If the workflow needs to read from a separate private control-plane repo, the repository's default `GITHUB_TOKEN` is usually not enough
-   - In that case, add a dedicated secret such as `ENVCRAFT_GITHUB_TOKEN`
+   - In that case, install a GitHub App with access to the control-plane repo and provide its credentials to the workflow
 
-## When `ENVCRAFT_GITHUB_TOKEN` is needed
+## When dedicated CI auth is needed
 
-You only need a dedicated token like `ENVCRAFT_GITHUB_TOKEN` in repositories or workflows that run EnvCraft inside GitHub Actions and need access to a separate private control-plane repo such as `envcraft-secrets`.
+You only need dedicated non-interactive auth in repositories or workflows that run EnvCraft inside GitHub Actions and need access to a separate private control-plane repo such as `envcraft-secrets`.
 
 You do not need it for:
 

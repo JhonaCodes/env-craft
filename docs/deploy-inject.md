@@ -47,12 +47,12 @@ envcraft deploy-inject \
 
 ## Authentication notes
 
-- local shells usually do not need `ENVCRAFT_GITHUB_TOKEN` because EnvCraft can use your interactive GitHub auth
-- add `ENVCRAFT_GITHUB_TOKEN` only in repositories or workflows that run EnvCraft inside GitHub Actions or another non-interactive CI environment
+- local shells usually do not need dedicated CI auth because EnvCraft can use your interactive GitHub auth
+- in GitHub Actions or another non-interactive CI environment, prefer `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` or `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
 - this is needed when that workflow must access a separate private control-plane repo such as `envcraft-secrets`
-- if a repository never runs EnvCraft in CI, it does not need `ENVCRAFT_GITHUB_TOKEN`
+- if a repository never runs EnvCraft in CI, it does not need these values
 
 ## Common mistakes
 
 - using this in a Dockerfile build stage; it is intended for runtime or prestart injection
-- assuming every repository needs `ENVCRAFT_GITHUB_TOKEN`; it is a CI integration requirement, not a universal requirement
+- assuming every repository needs GitHub App CI auth; it is a CI integration requirement, not a universal requirement

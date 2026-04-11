@@ -24,6 +24,7 @@ envcraft init --github-owner <owner> --control-repo <repo>
 
 - `~/.envcraft/config.toml`
 - `~/.envcraft/repos/<control-repo>`
+- `~/.envcraft/repos/<control-repo>/.envcraft/github-app-setup.md`
 - the remote control-plane repo contents
 
 ## Common variants
@@ -49,10 +50,12 @@ envcraft init \
 - clones or updates the local control-plane checkout
 - writes `deliver.yml`
 - writes `envcraft-deliver.mjs`
+- writes GitHub App setup notes under `.envcraft/`
 - commits and pushes bootstrap changes if needed
+- prints the next-step command for CI auth: `envcraft github-app setup`
 
 ## Common mistakes
 
 - assuming `init` links an application repo; that is `envcraft link`
+- assuming `init` finishes CI auth by itself; use `envcraft github-app setup` next
 - assuming `init` creates app secrets; that is `envcraft set`
-

@@ -105,8 +105,8 @@ impl DeliverySession {
 
     /// Remove this session file from disk.
     pub fn delete_from_disk(&self) -> Result<()> {
-        if let Ok(path) = AppConfig::requests_dir()
-            .map(|d| d.join(format!("{}.json", self.request_id)))
+        if let Ok(path) =
+            AppConfig::requests_dir().map(|d| d.join(format!("{}.json", self.request_id)))
         {
             if path.exists() {
                 fs::remove_file(&path)?;
@@ -214,9 +214,7 @@ mod tests {
             recipient_public_key_b64: "AAAA".to_string(),
             recipient_secret_key_b64: "BBBB".to_string(),
         };
-        let path = dir
-            .path()
-            .join(format!("{}.json", expired.request_id));
+        let path = dir.path().join(format!("{}.json", expired.request_id));
         std::fs::write(&path, serde_json::to_vec_pretty(&expired).unwrap()).unwrap();
         assert!(path.exists());
 

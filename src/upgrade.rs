@@ -61,8 +61,8 @@ pub fn upgrade_binary(version: Option<&str>) -> Result<PathBuf> {
     let checksums_url = checksums_download_url(version);
     match download_archive(&checksums_url) {
         Ok(checksums_bytes) => {
-            let checksums_text = String::from_utf8(checksums_bytes)
-                .context("SHA256SUMS file is not valid UTF-8")?;
+            let checksums_text =
+                String::from_utf8(checksums_bytes).context("SHA256SUMS file is not valid UTF-8")?;
             verify_checksum(&checksums_text, &target.asset_name(), &bytes)?;
         }
         Err(_) => {
@@ -302,7 +302,8 @@ abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890  envcraft-macos
 
     #[test]
     fn verify_checksum_fails_on_mismatch() {
-        let checksums = "0000000000000000000000000000000000000000000000000000000000000000  my-archive.tar.gz\n";
+        let checksums =
+            "0000000000000000000000000000000000000000000000000000000000000000  my-archive.tar.gz\n";
         let result = verify_checksum(checksums, "my-archive.tar.gz", b"actual data");
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();

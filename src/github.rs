@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    env, fs,
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -12,14 +12,16 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use dryoc::classic::crypto_box::{PublicKey, crypto_box_seal};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use zip::ZipArchive;
 
 use crate::{
     config::AppConfig,
+    github_app::StoredGitHubAppMetadata,
     session::{DeliveryEnvelope, DeliverySession},
     ui::ProgressSpinner,
 };
@@ -97,6 +99,29 @@ struct GhHostEntry {
     oauth_token: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct GitHubAppCredentials {
+    app_id: String,
+    private_key_pem: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallationInfo {
+    id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallationTokenResponse {
+    token: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GitHubAppJwtClaims<'a> {
+    iat: usize,
+    exp: usize,
+    iss: &'a str,
+}
+
 impl GitHubClient {
     pub fn from_token_source(token_env_var: &str) -> Result<Self> {
         if let Ok(token) = std::env::var(token_env_var) {
@@ -119,7 +144,24 @@ impl GitHubClient {
     }
 
     pub fn from_config(config: &AppConfig) -> Result<Self> {
+        if let Some(client) = Self::from_github_app_config(config)? {
+            return Ok(client);
+        }
+
         Self::from_token_source(&config.token_env_var)
+    }
+
+    pub fn from_github_app_config(config: &AppConfig) -> Result<Option<Self>> {
+        let Some(credentials) = load_github_app_credentials(config)? else {
+            return Ok(None);
+        };
+
+        let token = create_installation_token(
+            &credentials,
+            &config.github_owner,
+            Some(&config.control_repo),
+        )?;
+        Ok(Some(Self::new(&token)?))
     }
 
     pub fn new(token: &str) -> Result<Self> {
@@ -584,6 +626,186 @@ impl GitHubClient {
     }
 }
 
+fn load_github_app_credentials(config: &AppConfig) -> Result<Option<GitHubAppCredentials>> {
+    let app_id = match env::var(&config.github_app_id_env_var) {
+        Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => match load_stored_github_app_metadata(config)? {
+            Some(metadata) => metadata.app_id,
+            None => return Ok(None),
+        },
+    };
+
+    let private_key_pem = match env::var(&config.github_app_private_key_env_var) {
+        Ok(value) if !value.trim().is_empty() => normalize_private_key(&value),
+        _ => match env::var(&config.github_app_private_key_file_env_var) {
+            Ok(path) if !path.trim().is_empty() => {
+                let raw = fs::read_to_string(path.trim()).with_context(|| {
+                    format!("failed to read GitHub App private key from {}", path.trim())
+                })?;
+                normalize_private_key(&raw)
+            }
+            _ => match load_stored_github_app_private_key(config)? {
+                Some(value) => value,
+                None => {
+                    bail!(
+                        "GitHub App auth requires {} or {} when {} is set",
+                        config.github_app_private_key_env_var,
+                        config.github_app_private_key_file_env_var,
+                        config.github_app_id_env_var
+                    )
+                }
+            },
+        },
+    };
+
+    Ok(Some(GitHubAppCredentials {
+        app_id,
+        private_key_pem,
+    }))
+}
+
+fn load_stored_github_app_metadata(config: &AppConfig) -> Result<Option<StoredGitHubAppMetadata>> {
+    let path = config.github_app_metadata_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "failed to read stored GitHub App metadata at {}",
+            path.display()
+        )
+    })?;
+    let metadata = toml::from_str(&raw).with_context(|| {
+        format!(
+            "failed to parse stored GitHub App metadata at {}",
+            path.display()
+        )
+    })?;
+    Ok(Some(metadata))
+}
+
+fn load_stored_github_app_private_key(config: &AppConfig) -> Result<Option<String>> {
+    let path = config.github_app_private_key_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "failed to read stored GitHub App private key at {}",
+            path.display()
+        )
+    })?;
+    Ok(Some(normalize_private_key(&raw)))
+}
+
+fn normalize_private_key(value: &str) -> String {
+    value.replace("\\n", "\n")
+}
+
+fn create_installation_token(
+    credentials: &GitHubAppCredentials,
+    owner: &str,
+    repo: Option<&str>,
+) -> Result<String> {
+    let client = Client::builder().build()?;
+    let jwt = create_github_app_jwt(credentials)?;
+    let installation_id = resolve_installation_id(&client, &jwt, owner, repo)?;
+    let url = format!("{API_BASE}/app/installations/{installation_id}/access_tokens");
+
+    let response = client
+        .post(&url)
+        .header(AUTHORIZATION, format!("Bearer {jwt}"))
+        .header(ACCEPT, ACCEPT_HEADER)
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .header(
+            USER_AGENT,
+            format!("envcraft/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .json(&json!({}))
+        .send()?;
+
+    if !response.status().is_success() {
+        return Err(read_error(response));
+    }
+
+    let payload: InstallationTokenResponse = response
+        .json()
+        .context("failed to decode GitHub App installation token response")?;
+    Ok(payload.token)
+}
+
+fn resolve_installation_id(
+    client: &Client,
+    jwt: &str,
+    owner: &str,
+    repo: Option<&str>,
+) -> Result<u64> {
+    if let Some(repo) = repo {
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/installation");
+        if let Some(installation) = get_installation(client, jwt, &url)? {
+            return Ok(installation.id);
+        }
+    }
+
+    let owner_urls = [
+        format!("{API_BASE}/users/{owner}/installation"),
+        format!("{API_BASE}/orgs/{owner}/installation"),
+    ];
+
+    for url in owner_urls {
+        if let Some(installation) = get_installation(client, jwt, &url)? {
+            return Ok(installation.id);
+        }
+    }
+
+    bail!(
+        "could not find a GitHub App installation for owner `{owner}`{}",
+        repo.map(|repo| format!(" and repo `{repo}`"))
+            .unwrap_or_default()
+    )
+}
+
+fn get_installation(client: &Client, jwt: &str, url: &str) -> Result<Option<InstallationInfo>> {
+    let response = client
+        .get(url)
+        .header(AUTHORIZATION, format!("Bearer {jwt}"))
+        .header(ACCEPT, ACCEPT_HEADER)
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .header(
+            USER_AGENT,
+            format!("envcraft/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .send()?;
+
+    match response.status().as_u16() {
+        200 => {
+            Ok(Some(response.json().context(
+                "failed to decode GitHub App installation response",
+            )?))
+        }
+        404 => Ok(None),
+        _ => Err(read_error(response)),
+    }
+}
+
+fn create_github_app_jwt(credentials: &GitHubAppCredentials) -> Result<String> {
+    let now = chrono::Utc::now().timestamp();
+    let iat = now.saturating_sub(60) as usize;
+    let exp = (now + 600) as usize;
+    let claims = GitHubAppJwtClaims {
+        iat,
+        exp,
+        iss: &credentials.app_id,
+    };
+
+    let key = EncodingKey::from_rsa_pem(credentials.private_key_pem.as_bytes())
+        .context("failed to parse GitHub App private key")?;
+
+    encode(&Header::new(Algorithm::RS256), &claims, &key).context("failed to sign GitHub App JWT")
+}
+
 fn read_github_cli_token() -> Result<Option<String>> {
     for path in github_cli_hosts_candidates() {
         if !path.exists() {
@@ -710,11 +932,12 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use crate::config::AppConfig;
     use crate::session::{DeliverySession, encrypt_for_session};
 
     use super::{
         GitHubClient, encrypt_for_github_secret, gh_api_endpoint, github_cli_hosts_candidates,
-        read_github_cli_token_from_hosts,
+        load_github_app_credentials, normalize_private_key, read_github_cli_token_from_hosts,
     };
 
     #[test]
@@ -775,5 +998,46 @@ mod tests {
             gh_api_endpoint("https://api.github.com/repos/JhonaCodes/env-craft"),
             "/repos/JhonaCodes/env-craft"
         );
+    }
+
+    #[test]
+    fn normalizes_escaped_private_key_newlines() {
+        let normalized = normalize_private_key("-----BEGIN KEY-----\\nline\\n-----END KEY-----");
+        assert!(normalized.contains("-----BEGIN KEY-----\nline\n-----END KEY-----"));
+    }
+
+    #[test]
+    fn loads_github_app_credentials_from_env() {
+        let temp = tempdir().unwrap();
+        let config = AppConfig {
+            github_owner: "JhonaCodes".to_string(),
+            control_repo: "envcraft-secrets".to_string(),
+            deliver_workflow: "deliver.yml".to_string(),
+            default_ref: "main".to_string(),
+            token_env_var: "GITHUB_TOKEN".to_string(),
+            github_app_id_env_var: "ENVCRAFT_GITHUB_APP_ID_TEST".to_string(),
+            github_app_private_key_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_TEST".to_string(),
+            github_app_private_key_file_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE_TEST"
+                .to_string(),
+            control_repo_local_path: Some(temp.path().join("repos/envcraft-secrets")),
+        };
+
+        unsafe {
+            env::set_var(&config.github_app_id_env_var, "12345");
+            env::set_var(
+                &config.github_app_private_key_env_var,
+                "-----BEGIN KEY-----\\nline\\n-----END KEY-----",
+            );
+        }
+
+        let credentials = load_github_app_credentials(&config).unwrap().unwrap();
+
+        unsafe {
+            env::remove_var(&config.github_app_id_env_var);
+            env::remove_var(&config.github_app_private_key_env_var);
+        }
+
+        assert_eq!(credentials.app_id, "12345");
+        assert!(credentials.private_key_pem.contains("\nline\n"));
     }
 }

@@ -26,7 +26,7 @@ envcraft upgrade
 Upgrade to a specific release:
 
 ```bash
-envcraft upgrade --version v0.1.4
+envcraft upgrade --version v0.1.5
 ```
 
 ## Expected side effects

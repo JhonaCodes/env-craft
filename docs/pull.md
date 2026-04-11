@@ -55,16 +55,17 @@ Interactive local usage:
 
 GitHub Actions usage:
 
-- the workflow must provide a token explicitly
-- if the workflow is in a different private repo than the control-plane repo, add a secret such as `ENVCRAFT_GITHUB_TOKEN`
-- map that secret into `GITHUB_TOKEN` for the EnvCraft step
+- prefer `ENVCRAFT_GITHUB_APP_ID` plus `ENVCRAFT_GITHUB_APP_PRIVATE_KEY` or `ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE`
+- if the workflow is in a different private repo than the control-plane repo, install the GitHub App on the control-plane repo
+- `GITHUB_TOKEN` and `ENVCRAFT_GITHUB_TOKEN` remain legacy fallbacks
 
 Example in GitHub Actions:
 
 ```yaml
 - name: Resolve build env with EnvCraft
   env:
-    GITHUB_TOKEN: ${{ secrets.ENVCRAFT_GITHUB_TOKEN }}
+    ENVCRAFT_GITHUB_APP_ID: ${{ secrets.ENVCRAFT_GITHUB_APP_ID }}
+    ENVCRAFT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.ENVCRAFT_GITHUB_APP_PRIVATE_KEY }}
   run: |
     envcraft pull --env prod --project acordio_app --root . --output .env
 ```

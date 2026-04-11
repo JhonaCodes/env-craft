@@ -121,24 +121,100 @@ Responsibilities:
 Expected layout:
 - `.github/workflows/deliver.yml`
 - `.github/scripts/envcraft-deliver.mjs`
+- `.envcraft/github-app-setup.md`
+- `.envcraft/github-app-template.json`
 - `projects/<project>/.envcraft.schema`
 
 The code repository for EnvCraft is separate from this control-plane repository.
+
+---
+
+Powered by [@JhonaCodes](https://github.com/JhonaCodes) through [EnvCraft](https://github.com/JhonaCodes/env-craft).
+
+Contributions are welcome.
 "#;
+
+fn github_app_setup_doc(config: &AppConfig) -> String {
+    format!(
+        r#"# GitHub App Setup
+
+EnvCraft can use a GitHub App installation to mint temporary installation access tokens for CI.
+
+Recommended flow:
+
+1. From any machine with EnvCraft configured for this control plane, run:
+
+   ```bash
+   envcraft github-app setup --ci-repo <repo-that-runs-envcraft-in-ci>
+   ```
+
+2. EnvCraft will:
+   - register a GitHub App from a manifest
+   - store the App ID and PEM locally under `~/.envcraft/github-apps/`
+   - optionally seed `{app_id_env}` and `{app_key_env}` into the CI repositories you pass with `--ci-repo`
+
+3. Open the install URL printed by EnvCraft and install the app on:
+
+   - `{control_repo}`
+
+4. Re-run:
+
+   ```bash
+   envcraft github-app status
+   ```
+
+CI repositories that call `envcraft pull` or `envcraft deploy-inject` should use:
+
+- `{app_id_env}`
+- `{app_key_env}`
+
+Legacy fallback:
+
+- `{token_env}`
+
+The legacy token is still supported, but the preferred path is the GitHub App installation flow.
+"#,
+        app_id_env = config.github_app_id_env_var,
+        app_key_env = config.github_app_private_key_env_var,
+        token_env = config.token_env_var,
+        control_repo = config.control_repo_slug(),
+    )
+}
+
+fn github_app_permissions_template() -> &'static str {
+    r#"{
+  "name": "envcraft-control-plane",
+  "url": "https://github.com/JhonaCodes/env-craft",
+  "description": "EnvCraft CI reader for a GitHub Secrets control-plane repository",
+  "public": false,
+  "default_permissions": {
+    "actions": "write",
+    "contents": "write",
+    "metadata": "read",
+    "secrets": "write",
+    "workflows": "write"
+  }
+}
+"#
+}
 
 pub fn bootstrap_control_plane(root: &Path, config: &AppConfig) -> Result<Vec<PathBuf>> {
     let workflow_dir = root.join(".github/workflows");
     let script_dir = root.join(".github/scripts");
     let projects_dir = root.join("projects");
+    let envcraft_dir = root.join(".envcraft");
 
     fs::create_dir_all(&workflow_dir)?;
     fs::create_dir_all(&script_dir)?;
     fs::create_dir_all(&projects_dir)?;
+    fs::create_dir_all(&envcraft_dir)?;
 
     let workflow_path = workflow_dir.join(&config.deliver_workflow);
     let script_path = script_dir.join("envcraft-deliver.mjs");
     let readme_path = root.join("README.md");
     let gitkeep_path = projects_dir.join(".gitkeep");
+    let github_app_setup_path = envcraft_dir.join("github-app-setup.md");
+    let github_app_template_path = envcraft_dir.join("github-app-template.json");
 
     fs::write(&workflow_path, DELIVER_WORKFLOW)?;
     fs::write(&script_path, DELIVER_SCRIPT)?;
@@ -148,8 +224,17 @@ pub fn bootstrap_control_plane(root: &Path, config: &AppConfig) -> Result<Vec<Pa
     if !gitkeep_path.exists() {
         fs::write(&gitkeep_path, "")?;
     }
+    fs::write(&github_app_setup_path, github_app_setup_doc(config))?;
+    fs::write(&github_app_template_path, github_app_permissions_template())?;
 
-    Ok(vec![workflow_path, script_path, readme_path, gitkeep_path])
+    Ok(vec![
+        workflow_path,
+        script_path,
+        readme_path,
+        gitkeep_path,
+        github_app_setup_path,
+        github_app_template_path,
+    ])
 }
 
 #[cfg(test)]
@@ -169,6 +254,9 @@ mod tests {
             deliver_workflow: "deliver.yml".to_string(),
             default_ref: "main".to_string(),
             token_env_var: "GITHUB_TOKEN".to_string(),
+            github_app_id_env_var: "ENVCRAFT_GITHUB_APP_ID".to_string(),
+            github_app_private_key_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY".to_string(),
+            github_app_private_key_file_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string(),
             control_repo_local_path: None,
         };
 
@@ -202,6 +290,9 @@ mod tests {
             deliver_workflow: "deliver.yml".to_string(),
             default_ref: "main".to_string(),
             token_env_var: "GITHUB_TOKEN".to_string(),
+            github_app_id_env_var: "ENVCRAFT_GITHUB_APP_ID".to_string(),
+            github_app_private_key_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY".to_string(),
+            github_app_private_key_file_env_var: "ENVCRAFT_GITHUB_APP_PRIVATE_KEY_FILE".to_string(),
             control_repo_local_path: None,
         };
 
