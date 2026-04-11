@@ -375,7 +375,9 @@ impl GitHubClient {
         ) {
             Ok(artifact) => artifact,
             Err(error) => {
-                spinner.fail(&format!("Timed out waiting for {environment}/{logical_key}"));
+                spinner.fail(&format!(
+                    "Timed out waiting for {environment}/{logical_key}"
+                ));
                 return Err(error);
             }
         };
@@ -391,7 +393,9 @@ impl GitHubClient {
             }
         };
         if envelope.request_id != session.request_id {
-            spinner.fail(&format!("Received mismatched payload for {environment}/{logical_key}"));
+            spinner.fail(&format!(
+                "Received mismatched payload for {environment}/{logical_key}"
+            ));
             bail!("received mismatched delivery response");
         }
         let payload = match session.decrypt_payload(&envelope.encrypted_payload) {
@@ -405,15 +409,14 @@ impl GitHubClient {
         struct RevealedPayload {
             value: String,
         }
-        let payload: RevealedPayload = match serde_json::from_str(&payload)
-            .context("failed to parse decrypted payload")
-        {
-            Ok(payload) => payload,
-            Err(error) => {
-                spinner.fail(&format!("Failed to decode {environment}/{logical_key}"));
-                return Err(error);
-            }
-        };
+        let payload: RevealedPayload =
+            match serde_json::from_str(&payload).context("failed to parse decrypted payload") {
+                Ok(payload) => payload,
+                Err(error) => {
+                    spinner.fail(&format!("Failed to decode {environment}/{logical_key}"));
+                    return Err(error);
+                }
+            };
         spinner.success(&format!(
             "Delivered {environment}/{logical_key} from GitHub Actions"
         ));

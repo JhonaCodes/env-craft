@@ -52,6 +52,26 @@ The intended usage model is:
 - let the current directory's `.envcraft.schema` resolve the project by default
 - use `--root` or `--project` only when you need to operate from somewhere else or recover from bad local context
 
+## Documentation
+
+Start here:
+
+- [Documentation index](docs/README.md)
+- [Mental model](docs/mental-model.md)
+- [Context resolution](docs/context-resolution.md)
+
+Command reference:
+
+- [init](docs/init.md)
+- [link](docs/link.md)
+- [set](docs/set.md)
+- [generate](docs/generate.md)
+- [list](docs/list.md)
+- [reveal](docs/reveal.md)
+- [pull](docs/pull.md)
+- [deploy-inject](docs/deploy-inject.md)
+- [upgrade](docs/upgrade.md)
+
 V1 goals in this repository:
 - bootstrap a central control-plane repo managed by EnvCraft
 - keep `.envcraft.schema` as the contract for each project
@@ -86,8 +106,6 @@ That keeps the system usable without additional public socket infrastructure whi
 ## Main commands
 
 ```bash
-cargo install --path .
-
 envcraft init \
   --github-owner JhonaCodes \
   --control-repo envcraft-secrets \
@@ -112,6 +130,8 @@ envcraft deploy-inject --env prod > env.sh
 # Explicit override when running from another directory
 envcraft set DB_PASSWORD --env prod --project nui-app --root /path/to/nui-app --generate
 ```
+
+For the complete command contract and more variants, use the docs in [`docs/`](docs/README.md).
 
 ## Typical workflows
 
@@ -159,6 +179,11 @@ envcraft pull --env dev --output .env.dev
 
 Each requested logical key is resolved through a one-time GitHub Actions workflow and assembled into a local `.env` file.
 
+CI note:
+- only repositories or workflows that run `envcraft` inside GitHub Actions against a private control-plane repo need a dedicated token such as `ENVCRAFT_GITHUB_TOKEN`
+- local development usually does not need this because `envcraft` can use your interactive GitHub auth
+- repositories that never run EnvCraft in CI do not need to add `ENVCRAFT_GITHUB_TOKEN`
+
 ### 5. Inject secrets for deployment
 
 ```bash
@@ -167,6 +192,8 @@ source env.sh
 ```
 
 This is the intended V1 integration point for Dokploy prestart or init hooks: Dokploy still builds and deploys, while EnvCraft resolves secrets right before runtime.
+
+If the deploy step runs inside GitHub Actions from another private repo, that workflow also needs a token such as `ENVCRAFT_GITHUB_TOKEN` with access to the private control-plane repo.
 
 ## Release installation
 
@@ -240,3 +267,15 @@ vars:
 - Because of that, EnvCraft writes secrets directly through the GitHub Secrets API, but reads them only through Actions.
 - Full `.env` delivery currently costs one workflow run per key. That is acceptable for V1 correctness and can be optimized later.
 - The CLI is intended to be installed globally; the source repository is only for development and release publishing.
+
+## License
+
+EnvCraft is licensed under the MIT License. See [LICENSE](LICENSE).
+
+## Attribution
+
+Forks, derivatives, and redistributions are welcome.
+
+If you fork or redistribute EnvCraft, please keep a visible reference to the original repository:
+
+`https://github.com/JhonaCodes/env-craft`
