@@ -12,7 +12,6 @@ use crate::{
     bootstrap::bootstrap_control_plane,
     config::AppConfig,
     github::GitHubClient,
-    naming::vault_secret_name,
     schema::ProjectSchema,
     secrets::{StackPreset, generate_from_presets, generate_secret_like},
     session::DeliverySession,
@@ -259,6 +258,10 @@ fn link(args: LinkArgs) -> Result<()> {
 
     let path = schema.save_to(&root)?;
     AppConfig::write_gitignore_entries(&root)?;
+    if let Some(config) = AppConfig::load_optional()? {
+        let synced_path = sync_control_plane_project_schema(&config, &schema)?;
+        println!("Synced control-plane schema at {}", synced_path.display());
+    }
     println!("Linked project with schema at {}", path.display());
     Ok(())
 }
@@ -286,7 +289,7 @@ fn set(args: SetArgs) -> Result<()> {
         args.required,
     );
 
-    let secret_name = vault_secret_name(&schema.project, &args.environment, &args.logical_key);
+    let secret_name = schema.secret_name_for(&args.logical_key, &args.environment);
     let github = GitHubClient::from_config(&config)?;
     github.put_repo_secret(
         &config.github_owner,
@@ -295,8 +298,10 @@ fn set(args: SetArgs) -> Result<()> {
         &value,
     )?;
     let path = schema.save_to(&root)?;
+    let synced_path = sync_control_plane_project_schema(&config, &schema)?;
     println!("Stored {}", secret_name);
     println!("Schema updated at {}", path.display());
+    println!("Control-plane schema synced at {}", synced_path.display());
     Ok(())
 }
 
@@ -328,7 +333,7 @@ fn generate(args: GenerateArgs) -> Result<()> {
         );
 
         if args.write_remote {
-            let secret_name = vault_secret_name(&schema.project, &args.environment, logical_key);
+            let secret_name = schema.secret_name_for(logical_key, &args.environment);
             github.put_repo_secret(
                 &config.github_owner,
                 &config.control_repo,
@@ -339,6 +344,7 @@ fn generate(args: GenerateArgs) -> Result<()> {
     }
 
     let path = schema.save_to(&root)?;
+    let synced_path = sync_control_plane_project_schema(&config, &schema)?;
     println!(
         "Generated {} secrets for {}:{}",
         vars.len(),
@@ -346,6 +352,7 @@ fn generate(args: GenerateArgs) -> Result<()> {
         args.environment
     );
     println!("Schema updated at {}", path.display());
+    println!("Control-plane schema synced at {}", synced_path.display());
     Ok(())
 }
 
@@ -378,11 +385,8 @@ fn list(args: ListArgs) -> Result<()> {
 
     for (logical_key, spec) in schema.keys() {
         let secret_name = match &args.environment {
-            Some(environment) => vault_secret_name(&schema.project, environment, logical_key),
-            None => spec
-                .vault_key
-                .clone()
-                .unwrap_or_else(|| logical_key.to_string()),
+            Some(environment) => schema.secret_name_for(logical_key, environment),
+            None => spec.display_secret_name(&schema.project, logical_key, None),
         };
         let remote_status = remote_metadata
             .as_ref()
@@ -418,7 +422,7 @@ fn pull(args: DeliverArgs) -> Result<()> {
     for (logical_key, _) in schema.keys() {
         let session = DeliverySession::new();
         session.save()?;
-        let secret_name = vault_secret_name(&schema.project, &args.environment, logical_key);
+        let secret_name = schema.secret_name_for(logical_key, &args.environment);
         let value = github.fetch_secret_via_delivery(
             &config,
             &session,
@@ -449,7 +453,7 @@ fn reveal(args: RevealArgs) -> Result<()> {
 
     let session = DeliverySession::new();
     session.save()?;
-    let secret_name = vault_secret_name(&schema.project, &args.environment, &args.logical_key);
+    let secret_name = schema.secret_name_for(&args.logical_key, &args.environment);
     let value = github.fetch_secret_via_delivery(
         &config,
         &session,
@@ -478,7 +482,7 @@ fn deploy_inject(args: DeliverArgs) -> Result<()> {
     for (logical_key, _) in schema.keys() {
         let session = DeliverySession::new();
         session.save()?;
-        let secret_name = vault_secret_name(&schema.project, &args.environment, logical_key);
+        let secret_name = schema.secret_name_for(logical_key, &args.environment);
         let value = github.fetch_secret_via_delivery(
             &config,
             &session,
@@ -586,16 +590,54 @@ fn ensure_local_control_repo(root: &Path, clone_url: &str, default_branch: &str)
     Ok(())
 }
 
+fn sync_control_plane_project_schema(
+    config: &AppConfig,
+    schema: &ProjectSchema,
+) -> Result<PathBuf> {
+    let control_repo_root = config.control_repo_path()?;
+    if !control_repo_root.join(".git").exists() {
+        bail!(
+            "control-plane repository is not available at {}. Run `envcraft init` first",
+            control_repo_root.display()
+        );
+    }
+
+    let project_dir = control_repo_root.join("projects").join(&schema.project);
+    fs::create_dir_all(&project_dir)?;
+    let schema_path = schema.save_to(&project_dir)?;
+    commit_and_push_paths(
+        &control_repo_root,
+        &[schema_path.clone()],
+        &config.default_ref,
+        &format!("Sync EnvCraft schema for {}", schema.project),
+    )?;
+    Ok(schema_path)
+}
+
 fn commit_and_push_bootstrap(
     root: &Path,
     created_files: &[PathBuf],
     default_branch: &str,
 ) -> Result<()> {
+    commit_and_push_paths(
+        root,
+        created_files,
+        default_branch,
+        "Bootstrap EnvCraft control plane",
+    )
+}
+
+fn commit_and_push_paths(
+    root: &Path,
+    files: &[PathBuf],
+    default_branch: &str,
+    commit_message: &str,
+) -> Result<()> {
     if repo_has_no_commits(root)? {
         run_git(root, &["checkout", "-B", default_branch])?;
     }
 
-    let relative_files = created_files
+    let relative_files = files
         .iter()
         .map(|path| {
             path.strip_prefix(root)
@@ -628,7 +670,7 @@ fn commit_and_push_bootstrap(
         return Ok(());
     }
 
-    run_git(root, &["commit", "-m", "Bootstrap EnvCraft control plane"])?;
+    run_git(root, &["commit", "-m", commit_message])?;
     run_git(root, &["push", "-u", "origin", default_branch])?;
     Ok(())
 }

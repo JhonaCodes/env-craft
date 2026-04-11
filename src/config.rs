@@ -66,6 +66,13 @@ impl AppConfig {
         Ok(Self::control_repos_dir()?.join(&self.control_repo))
     }
 
+    pub fn control_repo_path(&self) -> Result<PathBuf> {
+        match &self.control_repo_local_path {
+            Some(path) => Ok(path.clone()),
+            None => self.default_control_repo_path(),
+        }
+    }
+
     pub fn ensure_local_dirs(&self) -> Result<()> {
         fs::create_dir_all(Self::requests_dir()?)?;
         fs::create_dir_all(Self::artifacts_dir()?)?;

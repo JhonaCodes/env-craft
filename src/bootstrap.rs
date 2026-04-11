@@ -59,6 +59,8 @@ jobs:
           echo "Secret ${SECRET_NAME} is not available to this workflow." >&2
           exit 1
 
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -177,5 +179,8 @@ mod tests {
                 .join(".github/scripts/envcraft-deliver.mjs")
                 .exists()
         );
+        let workflow =
+            std::fs::read_to_string(dir.path().join(".github/workflows/deliver.yml")).unwrap();
+        assert!(workflow.contains("actions/checkout@v4"));
     }
 }
