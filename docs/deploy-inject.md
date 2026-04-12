@@ -8,6 +8,15 @@ Emit shell exports for deploy-time injection without baking secrets into images.
 
 - prestart or init hooks
 - deploy pipelines that need runtime environment exports
+- one-shot deploy scripts on remote hosts
+
+Prefer another pattern when:
+
+- your container can restart automatically while unhealthy
+- your process manager re-runs the startup script multiple times
+- your platform can persist service environment variables directly
+
+In those cases, resolve the environment once and store the final values in the platform instead of calling `deploy-inject` in the application startup path.
 
 ## Syntax
 
@@ -58,4 +67,5 @@ envcraft deploy-inject \
 ## Common mistakes
 
 - using this in a Dockerfile build stage; it is intended for runtime or prestart injection
+- using this in the main `ENTRYPOINT` of an API container that may restart repeatedly
 - assuming every repository needs GitHub App CI auth; it is a CI integration requirement, not a universal requirement

@@ -191,6 +191,12 @@ Typical use case:
 
 Install `envcraft` on the server first.
 
+Important:
+
+- V1 currently resolves one workflow run per key
+- use this for one-shot hooks, not for a container `ENTRYPOINT` that may restart multiple times
+- if Dokploy can store service environment variables directly, prefer resolving the environment once and saving the resulting values in the service config
+
 Then run:
 
 ```bash
@@ -222,6 +228,7 @@ Use `deploy-inject` when:
 - Dokploy or the host is the deploy executor
 
 Do **not** use `deploy-inject` inside a `Dockerfile`.
+Do **not** use `deploy-inject` inside a long-lived API container startup script that may be retried automatically.
 
 ## Which command to use
 
@@ -235,6 +242,12 @@ Use `deploy-inject` when:
 
 - the process needs exported environment variables right before it starts
 - the target is a server, container runtime, or Dokploy hook
+
+Prefer resolving once into platform-managed environment variables when:
+
+- the runtime is restart-prone
+- the service healthcheck may fail while secrets are still being resolved
+- the deployment platform already has a durable environment store
 
 ## First real test path
 

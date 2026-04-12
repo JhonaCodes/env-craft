@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.10 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.11 bash
 ```
 
 Verify the binary:
@@ -31,7 +31,7 @@ envcraft upgrade
 Or pin a version explicitly:
 
 ```bash
-envcraft upgrade --version v0.1.10
+envcraft upgrade --version v0.1.11
 ```
 
 If `envcraft` is not found after installation:
@@ -258,6 +258,13 @@ source env.sh
 
 This is the intended V1 integration point for Dokploy prestart or init hooks: Dokploy still builds and deploys, while EnvCraft resolves secrets right before runtime.
 
+Operational note:
+
+- use this in one-shot hooks or deploy scripts, not in the main `ENTRYPOINT` of a long-lived container
+- V1 currently resolves one workflow run per key through GitHub Actions
+- if your platform restarts unhealthy containers automatically, placing `deploy-inject` in the app startup path can trigger repeated secret deliveries
+- if Dokploy can persist environment variables for the service, prefer resolving the environment once and storing the final values there
+
 If the deploy step runs inside GitHub Actions from another private repo, that workflow should prefer a GitHub App installation with access to the private control-plane repo.
 
 ## Release installation
@@ -273,7 +280,7 @@ curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.s
 Version-pinned installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.10 bash
+curl -fsSL https://raw.githubusercontent.com/JhonaCodes/env-craft/main/install.sh | VERSION=v0.1.11 bash
 ```
 
 Supported release assets:
@@ -281,7 +288,7 @@ Supported release assets:
 - `envcraft-macos-x86_64.tar.gz`
 - `envcraft-macos-aarch64.tar.gz`
 
-To publish a release, push a semantic version tag such as `v0.1.10`.
+To publish a release, push a semantic version tag such as `v0.1.11`.
 
 ## Control-plane bootstrap
 
