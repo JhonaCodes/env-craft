@@ -9,6 +9,12 @@ EnvCraft is easiest to understand in this order:
 5. [Future: migration, scaling, and hybrid secret storage](future-migration.md)
 6. The command you want to run
 
+If you only want the shortest rule set:
+
+- local development or app builds: use `pull`
+- one-shot deploy hook: use `deploy-inject`
+- long-lived API container on Dokploy: resolve once, then store the final values in the service config
+
 ## Command reference
 
 - [0 to 100 setup and deploy flow](zero-to-deploy.md)
@@ -28,6 +34,8 @@ EnvCraft is easiest to understand in this order:
 
 - Full setup, CI, and deployment:
   - [0 to 100 setup and deploy flow](zero-to-deploy.md)
+- Mental model for local vs CI vs Dokploy:
+  - [Mental model](mental-model.md)
 
 - Future roadmap for import, scaling, and hybrid storage:
   - [Future: migration, scaling, and hybrid secret storage](future-migration.md)

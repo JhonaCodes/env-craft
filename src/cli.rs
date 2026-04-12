@@ -224,7 +224,7 @@ struct GitHubAppConnectArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.11")]
+#[command(after_help = "Examples:\n  envcraft upgrade\n  envcraft upgrade --version v0.1.12")]
 struct UpgradeArgs {
     #[arg(long)]
     version: Option<String>,

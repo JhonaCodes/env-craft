@@ -237,6 +237,7 @@ Use `pull` when:
 - the build step needs `.env`
 - the values are consumed during compilation
 - the result is a file like `.env`, `.env.dev`, or `.env.prod`
+- you are building a mobile app such as Flutter and want to generate the environment file before `build_runner`, codegen, or the actual app build
 
 Use `deploy-inject` when:
 
@@ -248,6 +249,49 @@ Prefer resolving once into platform-managed environment variables when:
 - the runtime is restart-prone
 - the service healthcheck may fail while secrets are still being resolved
 - the deployment platform already has a durable environment store
+
+## Recommended defaults by target
+
+### Flutter mobile app
+
+Recommended pattern:
+
+1. run `envcraft pull --env <env> --output .env`
+2. generate code if needed
+3. build the app
+
+Why:
+
+- mobile apps usually need values during build time
+- `pull` produces a stable file that code generators and build scripts can consume
+
+### Backend API on Dokploy
+
+Recommended pattern:
+
+1. keep the values in EnvCraft with `set`
+2. resolve the environment before the deploy or before updating the service config
+3. store the final values in Dokploy
+4. let the container start without calling EnvCraft in the main startup path
+
+Why:
+
+- APIs are long-lived services
+- container restart loops can cause repeated secret deliveries in V1
+- Dokploy already provides a durable environment store for the final runtime values
+
+### One-shot remote shell deploy
+
+Recommended pattern:
+
+1. run `envcraft deploy-inject --env <env> > /tmp/app.env.sh`
+2. `source` that file
+3. launch the process or deployment command
+
+Why:
+
+- this is the case where `deploy-inject` fits best in V1
+- the hook runs once, resolves values once, and then exits
 
 ## First real test path
 

@@ -6,6 +6,8 @@ Use the EnvCraft GitHub App when a repository runs `envcraft` inside GitHub Acti
 
 This is the preferred CI auth path.
 
+It is also useful for other non-interactive environments that run EnvCraft directly, but it should not be confused with the final runtime configuration of an application service.
+
 ## Why this exists
 
 `GITHUB_TOKEN` from one repository cannot read another private repository by default.
@@ -130,6 +132,7 @@ Those files are for local reuse only. CI should still use repository secrets.
 ## Common mistakes
 
 - Assuming every repo needs GitHub App secrets. Only repos that run EnvCraft in CI need them.
+- Assuming Dokploy or another runtime platform should keep the GitHub App bootstrap values forever inside the app container. Prefer using them only where EnvCraft itself runs non-interactively.
 - Running `setup` as if it should create a separate GitHub App per project. EnvCraft should use one app per control plane, then `connect` more repos to it.
 - Deleting the GitHub App in GitHub and expecting old local metadata to keep working. Re-run `envcraft github-app setup` so EnvCraft can recreate it.
 - Skipping the one-time owner installation on the control-plane repo and expecting `connect` to work.

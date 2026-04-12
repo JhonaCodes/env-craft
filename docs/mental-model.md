@@ -63,6 +63,67 @@ You do not need it for:
    - Receive an encrypted payload
    - Print one value or assemble a `.env` file
 
+## Delivery modes
+
+The most important distinction in EnvCraft is not only `project` and `env`, but also **where the resolved values will be consumed**.
+
+### 1. Local development
+
+Use:
+
+- `envcraft pull --env dev --output .env`
+
+This is the normal mode for:
+
+- your laptop
+- local API runs
+- local Flutter runs
+- generating files such as `.env`, `.env.dev`, or `.env.prod`
+
+### 2. Build-time resolution
+
+Use:
+
+- `envcraft pull` inside GitHub Actions or another CI system
+
+This is the correct mode when the application needs environment values during compilation.
+
+Typical examples:
+
+- Flutter mobile builds
+- frontend builds
+- generated code that reads `.env`
+
+### 3. One-shot deploy-time resolution
+
+Use:
+
+- `envcraft deploy-inject --env prod`
+
+This is the right fit for:
+
+- deploy hooks
+- prestart scripts that run once per deploy
+- remote shell sessions where you want to export values before launching a process
+
+### 4. Long-lived platform runtime
+
+Do **not** put `envcraft deploy-inject` in the hot path of a long-lived API container that may restart automatically.
+
+Why:
+
+- V1 currently resolves secrets through GitHub Actions
+- delivery currently costs one workflow run per key
+- repeated restarts can trigger repeated secret deliveries
+
+For platforms such as Dokploy, the safer pattern is:
+
+1. resolve the target environment once
+2. store the final values in the service configuration
+3. let the container start with normal environment variables already present
+
+EnvCraft still remains the source of truth in that pattern. The only difference is **when** the values are materialized.
+
 ## Secret naming
 
 EnvCraft stores secrets in GitHub using deterministic names:
